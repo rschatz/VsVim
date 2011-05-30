@@ -471,6 +471,12 @@ type Motion =
     /// The quoted string excluding the quotes
     | QuotedStringContents of char
 
+    /// Enclosed block, including parenthesis
+    | EnclosedBlock of char * char
+
+    /// Enclosed block, excluding parenthesis
+    | EnclosedBlockContents of char * char
+
     /// Repeat the last CharSearch value
     | RepeatLastCharSearch
 

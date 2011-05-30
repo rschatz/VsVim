@@ -244,6 +244,86 @@ type internal MotionCapture
                     MotionFlags.TextObjectSelection,
                     Motion.QuotedStringContents '`')
                 yield (
+                    "a[",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('[',']'))
+                yield (
+                    "a]",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('[',']'))
+                yield (
+                    "i[",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('[',']'))
+                yield (
+                    "i]",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('[',']'))
+                yield (
+                    "a(",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('(',')'))
+                yield (
+                    "a)",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('(',')'))
+                yield (
+                    "ab",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('(',')'))
+                yield (
+                    "i(",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('(',')'))
+                yield (
+                    "i)",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('(',')'))
+                yield (
+                    "ib",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('(',')'))
+                yield (
+                    "a<lt>",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('<','>'))
+                yield (
+                    "a>",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('<','>'))
+                yield (
+                    "i<lt>",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('<','>'))
+                yield (
+                    "i>",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('<','>'))
+                yield (
+                    "a{",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('{','}'))
+                yield (
+                    "a}",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('{','}'))
+                yield (
+                    "aB",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlock('{','}'))
+                yield (
+                    "i{",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('{','}'))
+                yield (
+                    "i}",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('{','}'))
+                yield (
+                    "iB",
+                    MotionFlags.TextObjectSelection,
+                    Motion.EnclosedBlockContents('{','}'))
+                yield (
                     "G", 
                     MotionFlags.CursorMovement,
                     Motion.LineOrLastToFirstNonWhiteSpace)

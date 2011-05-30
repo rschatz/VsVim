@@ -1755,6 +1755,69 @@ type internal MotionUtil
                 MotionKind = MotionKind.CharacterWiseInclusive
                 MotionResultFlags = MotionResultFlags.None } |> Some
 
+    member x.EnclosedBlock includeDelim openDelim closeDelim count =
+        let cursorPoint = TextViewUtil.GetCaretPoint _textView
+        let startPoint = SnapshotUtil.GetStartPoint _textView.TextSnapshot
+        let endPoint = SnapshotUtil.GetEndPoint _textView.TextSnapshot
+
+        let rec forward count (point:SnapshotPoint) =
+            if count = 0 then
+                Some point
+            elif point = endPoint then
+                None
+            else
+                let nextPoint = point.Add(1)
+                if nextPoint = endPoint then
+                    None
+                else
+                    let ch = nextPoint.GetChar()
+                    if ch = closeDelim then
+                        forward (count-1) nextPoint
+                    elif ch = openDelim then
+                        forward (count+1) nextPoint
+                    else
+                        forward count nextPoint
+        let rec backward count (point:SnapshotPoint) =
+            if count = 0 then
+                Some point
+            elif point = startPoint then
+                None
+            else
+                let nextPoint = point.Subtract(1)
+                let ch = nextPoint.GetChar()
+                if ch = openDelim then
+                    backward (count-1) nextPoint
+                elif ch = closeDelim then
+                    backward (count+1) nextPoint
+                else
+                    backward count nextPoint
+
+        let point1 =
+            if cursorPoint <> endPoint && cursorPoint.GetChar() = openDelim then
+                backward (count-1) cursorPoint
+            else
+                backward count cursorPoint
+        let point2 =
+            if cursorPoint <> endPoint && cursorPoint.GetChar() = closeDelim then
+                forward (count-1) cursorPoint
+            else
+                forward count cursorPoint
+
+        match point1, point2 with
+            | (Some p1), (Some p2) ->
+                if p1.Difference(p2) <= 0 then
+                    None
+                else
+                    let span =
+                        if includeDelim then
+                            SnapshotSpan(p1, p2.Add(1))
+                        else
+                            SnapshotSpan(p1.Add(1), p2)
+                    Some { Span = span; IsForward = true; MotionKind = MotionKind.CharacterWiseExclusive; MotionResultFlags = MotionResultFlags.None }
+            | _ ->
+                None
+
+
     /// Get the motion for a search command.  Used to implement the '/' and '?' motions
     member x.Search (patternData : PatternData) count = 
 
@@ -1994,6 +2057,8 @@ type internal MotionUtil
             | Motion.ParagraphForward -> x.ParagraphForward motionArgument.Count |> Some
             | Motion.QuotedString c -> x.QuotedString c
             | Motion.QuotedStringContents c -> x.QuotedStringContents c
+            | Motion.EnclosedBlock(o,c) -> x.EnclosedBlock true o c motionArgument.Count
+            | Motion.EnclosedBlockContents(o,c) -> x.EnclosedBlock false o c motionArgument.Count
             | Motion.RepeatLastCharSearch -> x.RepeatLastCharSearch()
             | Motion.RepeatLastCharSearchOpposite -> x.RepeatLastCharSearchOpposite()
             | Motion.Search patternData-> x.Search patternData motionArgument.Count
