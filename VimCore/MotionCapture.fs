@@ -222,27 +222,27 @@ type internal MotionCapture
                 yield (
                     "a\"", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedString)
+                    Motion.QuotedString '\"')
                 yield (
                     "a'", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedString)
+                    Motion.QuotedString '\'')
                 yield (
                     "a`", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedString)
+                    Motion.QuotedString '`')
                 yield (
                     "i\"", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedStringContents)
+                    Motion.QuotedStringContents '\"')
                 yield (
                     "i'", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedStringContents)
+                    Motion.QuotedStringContents '\'')
                 yield (
                     "i`", 
                     MotionFlags.TextObjectSelection,
-                    Motion.QuotedStringContents)
+                    Motion.QuotedStringContents '`')
                 yield (
                     "G", 
                     MotionFlags.CursorMovement,

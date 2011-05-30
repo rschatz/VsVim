@@ -1542,7 +1542,7 @@ namespace VimCore.UnitTest
         public void QuotedString1()
         {
             Create(@"""foo""");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 0, 5), MotionKind.CharacterWiseInclusive);
         }
@@ -1552,7 +1552,7 @@ namespace VimCore.UnitTest
         public void QuotedString2()
         {
             Create(@"  ""foo""");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 0, 7), MotionKind.CharacterWiseInclusive);
         }
@@ -1562,7 +1562,7 @@ namespace VimCore.UnitTest
         public void QuotedString3()
         {
             Create(@"""foo""  ");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 0, 7), MotionKind.CharacterWiseInclusive);
         }
@@ -1572,7 +1572,7 @@ namespace VimCore.UnitTest
         public void QuotedString4()
         {
             Create(@"  ""foo""  ");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 2, 7), MotionKind.CharacterWiseInclusive);
         }
@@ -1582,7 +1582,7 @@ namespace VimCore.UnitTest
         public void QuotedString5()
         {
             Create(@"""foo\""""");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 0, 7), MotionKind.CharacterWiseInclusive);
         }
@@ -1593,7 +1593,7 @@ namespace VimCore.UnitTest
         {
             Create(@"""foo(""""");
             _localSettings.QuoteEscape = @"(";
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 0, 7), MotionKind.CharacterWiseInclusive);
         }
@@ -1602,7 +1602,7 @@ namespace VimCore.UnitTest
         public void QuotedString7()
         {
             Create(@"foo");
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsNone());
         }
 
@@ -1612,7 +1612,7 @@ namespace VimCore.UnitTest
             Create(@"""foo"" ""bar""");
             var start = _snapshot.GetText().IndexOf('b');
             _textView.MoveCaretTo(start);
-            var data = _motionUtil.QuotedString();
+            var data = _motionUtil.QuotedString('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, start - 2, 6), MotionKind.CharacterWiseInclusive);
         }
@@ -1621,7 +1621,7 @@ namespace VimCore.UnitTest
         public void QuotedStringContents1()
         {
             Create(@"""foo""");
-            var data = _motionUtil.QuotedStringContents();
+            var data = _motionUtil.QuotedStringContents('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 1, 3), MotionKind.CharacterWiseInclusive);
         }
@@ -1630,7 +1630,7 @@ namespace VimCore.UnitTest
         public void QuotedStringContents2()
         {
             Create(@" ""bar""");
-            var data = _motionUtil.QuotedStringContents();
+            var data = _motionUtil.QuotedStringContents('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, 2, 3), MotionKind.CharacterWiseInclusive);
         }
@@ -1641,7 +1641,7 @@ namespace VimCore.UnitTest
             Create(@"""foo"" ""bar""");
             var start = _snapshot.GetText().IndexOf('b');
             _textView.MoveCaretTo(start);
-            var data = _motionUtil.QuotedStringContents();
+            var data = _motionUtil.QuotedStringContents('"');
             Assert.IsTrue(data.IsSome());
             AssertData(data.Value, new SnapshotSpan(_snapshot, start, 3), MotionKind.CharacterWiseInclusive);
         }
