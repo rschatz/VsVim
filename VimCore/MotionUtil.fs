@@ -1760,45 +1760,62 @@ type internal MotionUtil
         let startPoint = SnapshotUtil.GetStartPoint _textView.TextSnapshot
         let endPoint = SnapshotUtil.GetEndPoint _textView.TextSnapshot
 
-        let rec forward count (point:SnapshotPoint) =
-            if count = 0 then
-                Some point
-            elif point = endPoint then
-                None
-            else
-                let nextPoint = point.Add(1)
-                if nextPoint = endPoint then
+        let forward count (point:SnapshotPoint) =
+            let rec inner count point escaped =
+                if count = 0 then
+                    Some point
+                elif SnapshotPointUtil.IsEndPoint point then
                     None
                 else
-                    let ch = nextPoint.GetChar()
-                    if ch = closeDelim then
-                        forward (count-1) nextPoint
-                    elif ch = openDelim then
-                        forward (count+1) nextPoint
+                    let nextPoint = SnapshotPointUtil.AddOne point
+                    if SnapshotPointUtil.IsEndPoint nextPoint then
+                        None
                     else
-                        forward count nextPoint
+                        let ch = SnapshotPointUtil.GetChar nextPoint
+                        if not escaped && ch = closeDelim then
+                            inner (count-1) nextPoint false
+                        elif not escaped && ch = openDelim then
+                            inner (count+1) nextPoint false
+                        elif not escaped && StringUtil.containsChar _localSettings.QuoteEscape ch then
+                            inner count nextPoint true
+                        else
+                            inner count nextPoint false
+            inner count point false
         let rec backward count (point:SnapshotPoint) =
+            let rec isEscaped point =
+                if SnapshotPointUtil.IsStartPoint point then
+                    false
+                else
+                    let nextPoint = SnapshotPointUtil.SubtractOne point
+                    let ch = SnapshotPointUtil.GetChar nextPoint
+                    if StringUtil.containsChar _localSettings.QuoteEscape ch then
+                        not (isEscaped nextPoint)
+                    else
+                        false
             if count = 0 then
                 Some point
-            elif point = startPoint then
+            elif SnapshotPointUtil.IsStartPoint point then
                 None
             else
-                let nextPoint = point.Subtract(1)
-                let ch = nextPoint.GetChar()
-                if ch = openDelim then
-                    backward (count-1) nextPoint
-                elif ch = closeDelim then
-                    backward (count+1) nextPoint
-                else
+                let nextPoint = SnapshotPointUtil.SubtractOne point
+                if isEscaped nextPoint then
                     backward count nextPoint
+                else
+                    let ch = SnapshotPointUtil.GetChar nextPoint
+                    if ch = openDelim then
+                        backward (count-1) nextPoint
+                    elif ch = closeDelim then
+                        backward (count+1) nextPoint
+                    else
+                        backward count nextPoint
 
         let point1 =
-            if cursorPoint <> endPoint && cursorPoint.GetChar() = openDelim then
+            if not (SnapshotPointUtil.IsEndPoint cursorPoint) && (SnapshotPointUtil.GetChar cursorPoint) = openDelim then
                 backward (count-1) cursorPoint
             else
                 backward count cursorPoint
         let point2 =
-            if cursorPoint <> endPoint && cursorPoint.GetChar() = closeDelim then
+            if not (SnapshotPointUtil.IsEndPoint cursorPoint) && (SnapshotPointUtil.GetChar cursorPoint) = closeDelim then
                 forward (count-1) cursorPoint
             else
                 forward count cursorPoint
