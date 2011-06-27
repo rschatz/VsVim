@@ -18,15 +18,9 @@ namespace VimCore.UnitTest
         private IVimGlobalSettings _globalSettings;
         private IVimData _vimData;
 
-        private static string[] DefaultText = new string[] { 
-            "this is the default text value for searching",
-            "within this unit test.  I'm really losing my creativity",
-            "at this point and just typing whatever" };
-
         private void Create(params string[] lines)
         {
-            lines = lines.Length > 0 ? lines : DefaultText;
-            _textBuffer = EditorUtil.CreateBuffer(lines);
+            _textBuffer = EditorUtil.CreateTextBuffer(lines);
             _globalSettings = new GlobalSettings();
             _globalSettings.IgnoreCase = true;
             _globalSettings.HighlightSearch = true;

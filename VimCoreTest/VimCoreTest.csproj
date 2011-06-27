@@ -149,6 +149,8 @@
     <Compile Include="CommandRunnerTest.cs" />
     <Compile Include="CommandDefaultOperationsTest.cs" />
     <Compile Include="CommandUtilTest.cs" />
+    <Compile Include="EditorToSettingSynchronizerTest.cs" />
+    <Compile Include="FoldManagerTest.cs" />
     <Compile Include="ReplaceModeIntegrationTest.cs" />
     <Compile Include="MacroIntegrationTest.cs" />
     <Compile Include="IncrementalSearchTaggerTest.cs" />
@@ -167,7 +169,7 @@
     <Compile Include="SelectionChangeTrackerTest.cs" />
     <Compile Include="SeqUtilTest.cs" />
     <Compile Include="VisualModeIntegrationTest.cs" />
-    <Compile Include="FoldManagerTest.cs" />
+    <Compile Include="FoldDataTest.cs" />
     <Compile Include="InsertModeIntegrationTest.cs" />
     <Compile Include="FileSystemTest.cs" />
     <Compile Include="MotionUtilTest.cs" />
@@ -206,7 +208,6 @@
     <Compile Include="TextUtilTest2.cs" />
     <Compile Include="TextViewUtilTest.cs" />
     <Compile Include="TrackingLineColumnTest.cs" />
-    <Compile Include="TssUtilTest.cs" />
     <Compile Include="UndoRedoOperationsTest.cs" />
     <Compile Include="UndoTransactionTest.cs" />
     <Compile Include="ViewUtilTest.cs" />
@@ -215,6 +216,7 @@
     <Compile Include="VimIntegrationTests.cs" />
     <Compile Include="VimTest.cs" />
     <Compile Include="VisualModeTest.cs" />
+    <Compile Include="WordUtilTest.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Todo.txt" />

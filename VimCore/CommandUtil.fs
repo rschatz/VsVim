@@ -7,8 +7,6 @@ open Microsoft.VisualStudio.Text.Operations
 open Microsoft.VisualStudio.Text.Editor
 open Microsoft.VisualStudio.Text.Outlining
 
-// TODO: The fold commands need to be revisited.  They're not implemented to spec but
-// are good enough for now 
 type internal CommandUtil 
     (
         _buffer : IVimBuffer,
@@ -25,7 +23,7 @@ type internal CommandUtil
     let _registerMap = _buffer.RegisterMap
     let _markMap = _buffer.MarkMap
     let _vimData = _buffer.VimData
-    let _localSettings = _buffer.Settings
+    let _localSettings = _buffer.LocalSettings
     let _globalSettings = _localSettings.GlobalSettings
     let _vim = _buffer.Vim
     let _vimHost = _vim.VimHost
@@ -65,14 +63,14 @@ type internal CommandUtil
         // Get the indent string to apply to the lines which are indented
         let indent = 
             x.CaretLine.GetText()
-            |> Seq.takeWhile CharUtil.IsSpaceOrTab
+            |> Seq.takeWhile CharUtil.IsBlank
             |> StringUtil.ofCharSeq
-            |> _operations.NormalizeSpacesAndTabs
+            |> _operations.NormalizeBlanks
 
         // Adjust the indentation on a given line of text to have the indentation
         // previously calculated
         let adjustTextLine (textLine : TextLine) =
-            let oldIndent = textLine.Text |> Seq.takeWhile CharUtil.IsSpaceOrTab |> StringUtil.ofCharSeq
+            let oldIndent = textLine.Text |> Seq.takeWhile CharUtil.IsBlank |> StringUtil.ofCharSeq
             let text = indent + (textLine.Text.Substring(oldIndent.Length))
             { textLine with Text = text }
 
@@ -302,14 +300,27 @@ type internal CommandUtil
     member x.ChangeLines count register = 
 
         let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
-        let lineNumber = x.CaretLine.LineNumber
+        x.ChangeLinesCore range register
 
-        // Caret position before the delete needs to be on the first non-whitespace character
-        // of the first line.  If the line is blank the caret should remain un-moved
-        let point =
-            x.CaretLine
+    /// Core routine for changing a set of lines in the ITextBuffer.  This is the backing function
+    /// for changing lines in both normal and visual mode
+    member x.ChangeLinesCore (range : SnapshotLineRange) register = 
+
+        // Caret position for the undo operation depends on the number of lines which are in
+        // range being deleted.  If there is a single line then we position it before the first
+        // non space / tab character in the first line.  If there is more than one line then we 
+        // position it at the equivalent location in the second line.  
+        // 
+        // There appears to be no logical reason for this behavior difference but it exists
+        let point = 
+            let line = 
+                if range.Count = 1 then
+                    range.StartLine
+                else
+                    SnapshotUtil.GetLine range.Snapshot (range.StartLineNumber + 1)
+            line
             |> SnapshotLineUtil.GetPoints Path.Forward
-            |> Seq.skipWhile SnapshotPointUtil.IsWhiteSpace
+            |> Seq.skipWhile SnapshotPointUtil.IsBlank
             |> SeqUtil.tryHeadOnly
         match point with
         | None -> ()
@@ -320,10 +331,9 @@ type internal CommandUtil
         x.EditWithLinkedChange "ChangeLines" (fun () -> 
 
             // Actually delete the text and position the caret
-            let snapshot = _textBuffer.Delete(range.Extent.Span)
-            let line = SnapshotUtil.GetLine snapshot lineNumber
+            _textBuffer.Delete(range.Extent.Span) |> ignore
             x.MoveCaretToDeletedLineStart range.StartLine
-    
+
             // Update the register now that the operation is complete.  Register value is odd here
             // because we really didn't delete linewise but it's required to be a linewise 
             // operation.  
@@ -407,31 +417,44 @@ type internal CommandUtil
     /// transaction. 
     member x.ChangeSelection register (visualSpan : VisualSpan) = 
 
-        // Caret needs to be positioned at the front of the span in undo so move it
-        // before we create the transaction
-        TextViewUtil.MoveCaretToPoint _textView visualSpan.Start
-        x.EditWithLinkedChange "ChangeSelection" (fun() -> 
+        // For block and character modes the change selection command is simply a 
+        // delete of the span and move into insert mode.  
+        let editSelection () = 
+            // Caret needs to be positioned at the front of the span in undo so move it
+            // before we create the transaction
+            TextViewUtil.MoveCaretToPoint _textView visualSpan.Start
+            x.EditWithLinkedChange "ChangeSelection" (fun() -> 
+                x.DeleteSelection register visualSpan |> ignore)
 
-            x.DeleteSelection register visualSpan |> ignore)
+        match visualSpan with
+        | VisualSpan.Character _ -> editSelection()
+        | VisualSpan.Block _ ->  editSelection()
+        | VisualSpan.Line range -> x.ChangeLinesCore range register
 
     /// Close a single fold under the caret
     member x.CloseFoldInSelection (visualSpan : VisualSpan) =
-        _operations.CloseFold visualSpan.LineRange.ExtentIncludingLineBreak 1
+        let range = visualSpan.LineRange
+        let offset = range.StartLineNumber
+        for i = 0 to range.Count - 1 do
+            let line = SnapshotUtil.GetLine x.CurrentSnapshot (offset + 1)
+            _foldManager.CloseFold line.Start 1
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Close 'count' folds under the caret
     member x.CloseFoldUnderCaret count =
-        _operations.CloseFold x.CaretLineRange.ExtentIncludingLineBreak count
+        _foldManager.CloseFold x.CaretPoint count
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Close all folds under the caret
     member x.CloseAllFoldsUnderCaret () =
-        _operations.CloseAllFolds x.CaretLineRange.ExtentIncludingLineBreak 
+        let span = SnapshotSpan(x.CaretPoint, 0)
+        _foldManager.CloseAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Close all folds in the selection
     member x.CloseAllFoldsInSelection (visualSpan : VisualSpan) =
-        _operations.CloseAllFolds visualSpan.LineRange.ExtentIncludingLineBreak
+        let span = visualSpan.LineRange.Extent
+        _foldManager.CloseAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete 'count' characters after the cursor on the current line.  Caret should 
@@ -486,27 +509,34 @@ type internal CommandUtil
 
     /// Delete a fold from the selection
     member x.DeleteFoldInSelection (visualSpan : VisualSpan) =
-        _operations.DeleteOneFoldAtCursor()
+        let range = visualSpan.LineRange
+        let offset = range.StartLineNumber
+        for i = 0 to range.Count - 1 do
+            let line = SnapshotUtil.GetLine x.CurrentSnapshot (offset + 1)
+            _foldManager.DeleteFold line.Start
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete a fold under the caret
     member x.DeleteFoldUnderCaret () = 
-        _operations.DeleteOneFoldAtCursor()
+        _foldManager.DeleteFold x.CaretPoint
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete a fold from the selection
     member x.DeleteAllFoldInSelection (visualSpan : VisualSpan) =
-        _operations.DeleteAllFoldsAtCursor()
+        let span = visualSpan.LineRange.Extent
+        _foldManager.DeleteAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete all folds under the caret
     member x.DeleteAllFoldsUnderCaret () =
-        _operations.DeleteAllFoldsAtCursor()
+        let span = SnapshotSpan(x.CaretPoint, 0)
+        _foldManager.DeleteAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete all of the folds in the ITextBuffer
     member x.DeleteAllFoldsInBuffer () =
-        _foldManager.DeleteAllFolds()
+        let extent = SnapshotUtil.GetExtent x.CurrentSnapshot
+        _foldManager.DeleteAllFolds extent
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete the selected text from the buffer and put it into the specified 
@@ -575,13 +605,21 @@ type internal CommandUtil
             use edit = _textBuffer.CreateEdit()
             visualSpan.Spans |> Seq.iter (fun span -> 
 
-                // If the span ends partially in a LineBreak extent put it fully across
-                // the extent
-                let span = 
-                    let line = span.End.GetContainingLine()
-                    let extent = SnapshotLineUtil.GetLineBreakSpan line
-                    if extent.Contains span.End then SnapshotSpan(span.Start, line.EndIncludingLineBreak)
-                    else span
+                // If the last included point in the SnapshotSpan is inside the line break
+                // portion of a line then extend the SnapshotSpan to encompass the full
+                // line break
+                let span =
+                    match SnapshotSpanUtil.GetLastIncludedPoint span with
+                    | None -> 
+                        // Don't need to special case a 0 length span as it won't actually
+                        // cause any change in the ITextBuffer
+                        span
+                    | Some last ->
+                        if SnapshotPointUtil.IsInsideLineBreak last then
+                            let line = SnapshotPointUtil.GetContainingLine last
+                            SnapshotSpan(span.Start, line.EndIncludingLineBreak)
+                        else
+                            span
 
                 edit.Delete(span.Span) |> ignore)
             let snapshot = edit.Apply()
@@ -595,6 +633,8 @@ type internal CommandUtil
 
     /// Delete count lines from the cursor.  The caret should be positioned at the start
     /// of the first line for both undo / redo
+    ///
+    /// TODO: this needs to operate on the Visual Snapshot
     member x.DeleteLines count register = 
         let line = x.CaretLine
         let span, stringData = 
@@ -711,8 +751,8 @@ type internal CommandUtil
 
     /// Close a fold under the caret for 'count' lines
     member x.FoldLines count =
-        _operations.FoldLines count
-
+        let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
+        _foldManager.CreateFold range
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Create a fold for the given MotionResult
@@ -1050,7 +1090,7 @@ type internal CommandUtil
             _operations.MoveCaretToMotionResult result
 
             // Beep if the motion doesn't actually move the caret.  This is currently done to 
-            // satisfy 'l' and 'h' at the end and start of lines respetively.  It may not be 
+            // satisfy 'l' and 'h' at the end and start of lines respectively.  It may not be 
             // needed for every empty motion but so far I can't find a reason why not
             if point = x.CaretPoint then 
                 _operations.Beep()
@@ -1058,24 +1098,31 @@ type internal CommandUtil
             else
                 CommandResult.Completed ModeSwitch.NoSwitch
 
-    /// Open a fold in visual mode 
+    /// Open a fold in visual mode.  In Visual Mode a single fold level is opened for every
+    /// line in the selection
     member x.OpenFoldInSelection (visualSpan : VisualSpan) = 
-        _operations.OpenFold visualSpan.LineRange.ExtentIncludingLineBreak 1
+        let range = visualSpan.LineRange
+        let offset = range.StartLineNumber
+        for i = 0 to range.Count - 1 do
+            let line = SnapshotUtil.GetLine x.CurrentSnapshot (offset + 1)
+            _foldManager.OpenFold line.Start 1
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Open 'count' folds under the caret
     member x.OpenFoldUnderCaret count = 
-        _operations.OpenFold x.CaretLineRange.ExtentIncludingLineBreak count
+        _foldManager.OpenFold x.CaretPoint count
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Open all of the folds under the caret 
     member x.OpenAllFoldsUnderCaret () =
-        _operations.OpenAllFolds x.CaretLineRange.ExtentIncludingLineBreak
+        let span = SnapshotSpan(x.CaretPoint, 1)
+        _foldManager.OpenAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Open all folds under the caret in visual mode
     member x.OpenAllFoldsInSelection (visualSpan : VisualSpan) = 
-        _operations.OpenAllFolds visualSpan.LineRange.ExtentIncludingLineBreak
+        let span = visualSpan.LineRange.ExtentIncludingLineBreak
+        _foldManager.OpenAllFolds span
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Run the Ping command
@@ -1298,9 +1345,10 @@ type internal CommandUtil
 
                     EditSpan.Block col, OperationKind.CharacterWise)
 
-        // Update the register with the deleted text
+        // Update the unnamed register with the deleted text
         let value = RegisterValue.String (StringData.OfEditSpan deletedSpan, operationKind)
-        _registerMap.SetRegisterValue register RegisterOperation.Delete value 
+        let unnamedRegister = _registerMap.GetRegister RegisterName.Unnamed
+        _registerMap.SetRegisterValue unnamedRegister RegisterOperation.Delete value 
 
         CommandResult.Completed ModeSwitch.SwitchPreviousMode
 
@@ -1771,7 +1819,9 @@ type internal CommandUtil
                 if x.CaretLine.LineNumber = 0 then 
                     _operations.Beep()
                     None
-                else 
+                elif x.CaretLine.LineNumber < count then
+                    0 |> Some
+                else
                     x.CaretLine.LineNumber - count |> Some
             | ScrollDirection.Down ->
                 if x.CaretLine.LineNumber = SnapshotUtil.GetLastLineNumber x.CurrentSnapshot then
@@ -1852,7 +1902,7 @@ type internal CommandUtil
             // line 
             let line = SnapshotUtil.GetLine x.CurrentSnapshot range.StartLineNumber
             let point = 
-                match TssUtil.TryFindFirstNonWhiteSpaceCharacter line with
+                match SnapshotLineUtil.GetFirstNonBlank line with 
                 | None -> SnapshotLineUtil.GetLastIncludedPoint line |> OptionUtil.getOrDefault line.Start
                 | Some point -> point
             TextViewUtil.MoveCaretToPoint _textView point)
@@ -1869,7 +1919,7 @@ type internal CommandUtil
             // line 
             let line = SnapshotUtil.GetLine x.CurrentSnapshot range.StartLineNumber
             let point = 
-                match TssUtil.TryFindFirstNonWhiteSpaceCharacter line with
+                match SnapshotLineUtil.GetFirstNonBlank line with 
                 | None -> SnapshotLineUtil.GetLastIncludedPoint line |> OptionUtil.getOrDefault line.Start
                 | Some point -> point
             TextViewUtil.MoveCaretToPoint _textView point)
@@ -2014,8 +2064,11 @@ type internal CommandUtil
         else
             CommandResult.Error
 
-    /// Yank the specified lines into the specified register 
+    /// Yank the specified lines into the specified register.  This command should operate
+    /// against the visual buffer if possible.  Yanking a line which contains the fold should
+    /// yank the entire fold
     member x.YankLines count register = 
+        let x = TextViewUtil.GetVisualSnapshotDataOrEdit _textView
         let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
         let data = StringData.OfSpan range.ExtentIncludingLineBreak 
         let value = RegisterValue.String (data, OperationKind.LineWise)

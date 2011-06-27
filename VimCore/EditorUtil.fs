@@ -2,6 +2,7 @@
 
 namespace Vim
 open Microsoft.VisualStudio.Text
+open Microsoft.VisualStudio.Text.Projection
 open Microsoft.VisualStudio.Text.Editor
 open Microsoft.VisualStudio.Text.Editor.OptionsExtensionMethods
 open Microsoft.VisualStudio.Text.Operations
@@ -64,7 +65,7 @@ type SnapshotLineRange
 /// Contains operations to help fudge the Editor APIs to be more F# friendly.  Does not
 /// include any Vim specific logic
 module SnapshotUtil = 
-    
+
     /// Get the last line in the ITextSnapshot.  Avoid pulling the entire buffer into memory
     /// slowly by using the index
     let GetLastLine (tss:ITextSnapshot) =
@@ -359,10 +360,6 @@ module SnapshotSpanUtil =
     /// Create an empty span at the given point
     let CreateEmpty point = SnapshotSpan(point, 0)
 
-    /// Create a SnapshotSpan from the given bounds. 
-    /// TODO: Delete this
-    let CreateFromBounds (startPoint:SnapshotPoint) (endPoint:SnapshotPoint) = SnapshotSpan(startPoint,endPoint)
-
     /// Create a span from the given point with the specified length
     let CreateWithLength (startPoint:SnapshotPoint) (length:int) = SnapshotSpan(startPoint, length)
 
@@ -497,12 +494,39 @@ module SnapshotLineUtil =
     let IsLastPointIncludingLineBreak (line : ITextSnapshotLine) (point : SnapshotPoint) = 
         point.Position + 1 = line.EndIncludingLineBreak.Position
 
+    /// Is this the last line in the ITextBuffer
+    let IsLastLine (line : ITextSnapshotLine) = 
+        let snapshot = line.Snapshot
+        snapshot.LineCount - 1 = line.LineNumber
+
     /// Does the line consist of only whitespace
-    let IsWhiteSpace line = 
+    let IsBlank line = 
         line
         |> GetExtent
         |> SnapshotSpanUtil.GetPoints Path.Forward
-        |> Seq.forall (fun point -> CharUtil.IsWhiteSpace (point.GetChar()))
+        |> Seq.forall (fun point -> CharUtil.IsBlank (point.GetChar()))
+
+    /// Get the first non-blank character on the line
+    let GetFirstNonBlank line = 
+        line
+        |> GetExtent
+        |> SnapshotSpanUtil.GetPoints Path.Forward
+        |> Seq.skipWhile (fun point -> CharUtil.IsBlank (point.GetChar()))
+        |> SeqUtil.tryHeadOnly
+
+    /// Get the first non-blank character on the line or the Start point if all 
+    /// characters are blank
+    let GetFirstNonBlankOrStart line = 
+        match GetFirstNonBlank line with
+        | None -> line.Start
+        | Some point -> point
+
+    /// Get the first non-blank character on the line or the End point if all
+    /// characters are blank
+    let GetFirstNonBlankOrEnd line = 
+        match GetFirstNonBlank line with
+        | None -> line.End
+        | Some point -> point
 
 [<RequireQualifiedAccess>]
 type PointKind =
@@ -552,6 +576,19 @@ module SnapshotPointUtil =
     let IsWhiteSpace point =
         if IsEndPoint point then false
         else CharUtil.IsWhiteSpace (point.GetChar())
+
+    /// Is this point a space or tab
+    let IsBlank point = 
+        if IsEndPoint point then false
+        else CharUtil.IsBlank (point.GetChar())
+
+    /// Is this point a blank or the end point of the ITextSnapshot
+    let IsBlankOrEnd point = 
+        IsBlank point || IsEndPoint point
+
+    /// Is this point not a blank 
+    let IsNotBlank point =
+        not (IsBlank point)
 
     /// Is this point white space or inside the line break?
     let IsWhiteSpaceOrInsideLineBreak point = 
@@ -921,6 +958,51 @@ module SnapshotLineRangeUtil =
         let endLine = snapshot.GetLineFromLineNumber(endNumber)
         CreateForLineRange startLine endLine
 
+module BufferGraphUtil = 
+
+    /// Map the point up to the given ITextSnapshot.  Returns None if the mapping is not 
+    /// possible
+    let MapPointUpToSnapshot (bufferGraph : IBufferGraph) point trackingMode affinity snapshot =
+        try
+            bufferGraph.MapUpToSnapshot(point, trackingMode, affinity, snapshot)
+            |> OptionUtil.ofNullable
+        with
+            | :? System.ArgumentException-> None
+            | :? System.InvalidOperationException -> None
+
+    /// Map the point down to the given ITextSnapshot.  Returns None if the mapping is not 
+    /// possible
+    let MapPointDownToSnapshot (bufferGraph : IBufferGraph) point trackingMode affinity snapshot =
+        try
+            bufferGraph.MapDownToSnapshot(point, trackingMode, affinity, snapshot)
+            |> OptionUtil.ofNullable
+        with
+            | :? System.ArgumentException-> None
+            | :? System.InvalidOperationException -> None
+
+    /// Map the SnapshotSpan down to the given ITextSnapshot.  Returns None if the mapping is
+    /// not possible
+    let MapSpanDownToSnapshot (bufferGraph : IBufferGraph) span trackingMode snapshot =
+        try
+            bufferGraph.MapDownToSnapshot(span, trackingMode, snapshot) |> Some
+        with
+            | :? System.ArgumentException-> None
+            | :? System.InvalidOperationException -> None
+
+/// The common pieces of information about an ITextSnapshot which are used
+/// to calculate items like motions
+type SnapshotData = {
+
+    /// SnapshotPoint for the Caret
+    CaretPoint : SnapshotPoint
+
+    /// ITextSnapshotLine on which the caret resides
+    CaretLine : ITextSnapshotLine
+
+    /// The current ITextSnapshot on which this data is based
+    CurrentSnapshot : ITextSnapshot
+}
+
 /// Contains operations to help fudge the Editor APIs to be more F# friendly.  Does not
 /// include any Vim specific logic
 module TextViewUtil =
@@ -945,9 +1027,19 @@ module TextViewUtil =
 
     let GetCaretPointAndLine textView = (GetCaretPoint textView),(GetCaretLine textView)
 
-    /// Returns a sequence of ITextSnapshotLines representing the visible lines in the buffer
-    let GetVisibleSnapshotLines (textView:ITextView) =
-        if textView.InLayout then Seq.empty
+    /// Get the count of Visible lines in the ITextView
+    let GetVisibleLineCount (textView : ITextView) = 
+        try
+            textView.TextViewLines.Count
+        with 
+            // TextViewLines can throw if the view is being laid out.  Highly unlikely we'd hit
+            // that inside of Vim but need to be careful
+            | _ -> 50
+
+    /// Returns a sequence of ITextSnapshotLine values representing the visible lines in the buffer
+    let GetVisibleSnapshotLines (textView : ITextView) =
+        if textView.InLayout then
+            Seq.empty
         else 
             let lines = textView.TextViewLines
             let startNumber = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber
@@ -981,15 +1073,55 @@ module TextViewUtil =
         let point = SnapshotPoint(tss, pos)
         MoveCaretToPoint textView point 
 
-    /// Get the count of Visible lines in the ITextView
-    let GetVisibleLineCount (textView : ITextView) = 
-        try
-            textView.TextViewLines.Count
-        with 
-            // TextViewLines can throw if the view is being laid out.  Highly unlikely we'd hit
-            // that inside of Vim but need to be careful
-            | _ -> 50
+    /// Get the SnapshotData value for the edit buffer.  Unlike the SnapshotData for the Visual Buffer this 
+    /// can always be retrieved because the caret point is presented in terms of the edit buffer
+    let GetEditSnapshotData (textView : ITextView) = 
+        let caretPoint = GetCaretPoint textView
+        let caretLine = SnapshotPointUtil.GetContainingLine caretPoint
+        { 
+            CaretPoint = caretPoint
+            CaretLine = caretLine
+            CurrentSnapshot = caretLine.Snapshot }
 
+    /// Get the SnapshotData value for the visual buffer.  Can return None if the information is not mappable
+    /// to the visual buffer.  Really this shouldn't ever happen unless the IProjectionBuffer was incorrectly
+    /// hooked up though
+    let GetVisualSnapshotData (textView : ITextView) = 
+
+        // Get the visual buffer information
+        let visualBuffer = textView.TextViewModel.VisualBuffer
+        let visualSnapshot = visualBuffer.CurrentSnapshot
+
+        // Map the caret up to the visual buffer from the edit buffer.  The visual buffer will be
+        // above the edit buffer.
+        //
+        // The choice of PointTrackingMode and PositionAffinity is quite arbitrary here and it's very
+        // possible there is a better choice for these values.  Since we are going up to a single root
+        // ITextBuffer in this case though these shouldn't matter too much
+        let caretPoint = 
+            let bufferGraph = textView.BufferGraph
+            let editCaretPoint = GetCaretPoint textView
+            BufferGraphUtil.MapPointUpToSnapshot bufferGraph editCaretPoint PointTrackingMode.Negative PositionAffinity.Predecessor visualSnapshot
+
+        match caretPoint with
+        | None ->
+            // If the caret can't be mapped up to the visual buffer then there is no way to get the 
+            // visual SnapshotData information.  This should represent a rather serious issue with the 
+            // ITextView though
+            None
+        | Some caretPoint ->
+            let caretLine = SnapshotPointUtil.GetContainingLine caretPoint
+            { 
+                CaretPoint = caretPoint
+                CaretLine = caretLine
+                CurrentSnapshot = caretLine.Snapshot } |> Some
+
+    /// Get the SnapshotData for the visual buffer if available.  If it's not available then fall back
+    /// to the edit buffer
+    let GetVisualSnapshotDataOrEdit textView = 
+        match GetVisualSnapshotData textView with
+        | Some snapshotData -> snapshotData
+        | None -> GetEditSnapshotData textView
 
 module TextSelectionUtil = 
 

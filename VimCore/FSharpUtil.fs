@@ -241,9 +241,19 @@ module internal MapUtil =
 module internal CharUtil =
     let MinValue = System.Char.MinValue
     let IsDigit x = System.Char.IsDigit(x)
+
+    /// TODO: Consider uses of this.  Should be using IsBlank
     let IsWhiteSpace x = System.Char.IsWhiteSpace(x)
+
+    /// TODO: Consider uses of this.  Should be using IsNotBlank
     let IsNotWhiteSpace x = not (System.Char.IsWhiteSpace(x))
-    let IsSpaceOrTab x = x = ' ' || x = '\t'
+
+    /// Is this the Vim definition of a blank character.  That is it a space
+    /// or tab
+    let IsBlank x = x = ' ' || x = '\t'
+
+    /// Is this a non-blank character in Vim
+    let IsNotBlank x = not (IsBlank x)
     let IsLetter x = System.Char.IsLetter(x)
     let IsUpper x = System.Char.IsUpper(x)
     let IsUpperLetter x = IsUpper x && IsLetter x
@@ -346,6 +356,13 @@ module internal OptionUtil =
         match opt with 
         | Some(value) -> value
         | None -> defaultValue
+
+    /// Convert the Nullable<T> to an Option<T>
+    let ofNullable (value : System.Nullable<'T>) =
+        if value.HasValue then
+            Some value.Value
+        else
+            None
 
 /// Represents a collection which is guarantee to have at least a single element.  This
 /// is very useful when dealing with discriminated unions of values where one is an element

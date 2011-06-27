@@ -10,8 +10,10 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Text.Operations;
+using Microsoft.VisualStudio.Text.Projection;
 using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Utilities;
 using Moq;
 using Vim.Extensions;
 
@@ -169,7 +171,7 @@ namespace Vim.UnitTest.Mock
             mock.SetupGet(x => x.TextBuffer).Returns(() => textView.TextBuffer);
             mock.SetupGet(x => x.TextSnapshot).Returns(() => textView.TextSnapshot);
             mock.SetupGet(x => x.Name).Returns(name);
-            mock.SetupGet(x => x.Settings).Returns(settings);
+            mock.SetupGet(x => x.LocalSettings).Returns(settings);
             mock.SetupGet(x => x.MarkMap).Returns(vim.MarkMap);
             mock.SetupGet(x => x.RegisterMap).Returns(vim.RegisterMap);
             mock.SetupGet(x => x.JumpList).Returns(jumpList);
@@ -244,13 +246,23 @@ namespace Vim.UnitTest.Mock
             lines.SetupGet(x => x.FirstVisibleLine).Returns(firstLine.Object);
             lines.SetupGet(x => x.LastVisibleLine).Returns(lastLine.Object);
 
-            var view = factory.Create<ITextView>();
-            view.SetupGet(x => x.TextBuffer).Returns(buffer);
-            view.SetupGet(x => x.TextViewLines).Returns(lines.Object);
-            view.SetupGet(x => x.Caret).Returns(caret.Object);
-            view.SetupGet(x => x.InLayout).Returns(false);
-            view.SetupGet(x => x.TextSnapshot).Returns(() => buffer.CurrentSnapshot);
-            return Tuple.Create(view, factory);
+            var visualBuffer = CreateTextBuffer(factory: factory);
+            var textViewModel = factory.Create<ITextViewModel>();
+            textViewModel.SetupGet(x => x.VisualBuffer).Returns(visualBuffer.Object);
+
+            var properties = new PropertyCollection();
+            var textView = factory.Create<ITextView>();
+            var bufferGraph = factory.Create<IBufferGraph>();
+            textView.SetupGet(x => x.TextBuffer).Returns(buffer);
+            textView.SetupGet(x => x.TextViewLines).Returns(lines.Object);
+            textView.SetupGet(x => x.Caret).Returns(caret.Object);
+            textView.SetupGet(x => x.InLayout).Returns(false);
+            textView.SetupGet(x => x.TextSnapshot).Returns(() => buffer.CurrentSnapshot);
+            textView.SetupGet(x => x.Properties).Returns(properties);
+            textView.SetupGet(x => x.BufferGraph).Returns(bufferGraph.Object);
+            textView.SetupGet(x => x.TextViewModel).Returns(textViewModel.Object);
+            textView.SetupGet(x => x.VisualSnapshot).Returns(visualBuffer.Object.CurrentSnapshot);
+            return Tuple.Create(textView, factory);
         }
 
         public static Mock<ITextBuffer> CreateTextBuffer(int? snapshotLength = null, MockRepository factory = null)

@@ -23,7 +23,8 @@ type internal NormalMode
     ) as this =
 
     let _textView = _buffer.TextView
-    let _settings = _buffer.Settings
+    let _localSettings = _buffer.LocalSettings
+    let _globalSettings = _localSettings.GlobalSettings
 
     /// Reset state for data in Normal Mode
     let _emptyData = {
@@ -43,13 +44,12 @@ type internal NormalMode
     do
         // Up cast here to work around the F# bug which prevents accessing a CLIEvent from
         // a derived type
-        let settings = _buffer.Settings.GlobalSettings :> IVimSettings
+        let settings = _buffer.LocalSettings.GlobalSettings :> IVimSettings
         settings.SettingChanged.Subscribe this.OnGlobalSettingsChanged |> _eventHandlers.Add
 
     member this.TextView = _buffer.TextView
     member this.TextBuffer = _buffer.TextBuffer
     member this.CaretPoint = _buffer.TextView.Caret.Position.BufferPosition
-    member this.Settings = _buffer.Settings
     member this.IsCommandRunnerPopulated = _runner.Commands |> SeqUtil.isNotEmpty
     member this.KeyRemapMode = 
         match _runner.KeyRemapMode with
@@ -62,7 +62,7 @@ type internal NormalMode
 
     member x.EnsureCommands() = 
         if not x.IsCommandRunnerPopulated then
-            let factory = Vim.Modes.CommandFactory(_operations, _capture, _buffer.MotionUtil, _buffer.JumpList, _buffer.Settings)
+            let factory = Vim.Modes.CommandFactory(_operations, _capture, _buffer.MotionUtil, _buffer.JumpList, _localSettings)
 
             x.CreateCommandBindings()
             |> Seq.append (factory.CreateMovementCommands())
@@ -77,7 +77,7 @@ type internal NormalMode
             factory.CreateMacroEditCommands _runner _buffer.Vim.MacroRecorder _eventHandlers
 
     /// Raised when a global setting is changed
-    member x.OnGlobalSettingsChanged (setting:Setting) = 
+    member x.OnGlobalSettingsChanged (setting : Setting) = 
         
         // If the 'tildeop' setting changes we need to update how we handle it
         if StringUtil.isEqual setting.Name GlobalSettingNames.TildeOpName && x.IsCommandRunnerPopulated then
@@ -99,7 +99,7 @@ type internal NormalMode
         let name = KeyInputUtil.CharToKeyInput '~' |> OneKeyInput
         let flags = CommandFlags.Repeatable
         let command = 
-            if _buffer.Settings.GlobalSettings.TildeOp then
+            if _globalSettings.TildeOp then
                 CommandBinding.MotionBinding (name, flags, (fun motion -> NormalCommand.ChangeCaseMotion (ChangeCharacterKind.ToggleCase, motion)))
             else
                 CommandBinding.NormalBinding (name, flags, NormalCommand.ChangeCaseCaretPoint ChangeCharacterKind.ToggleCase)
@@ -164,6 +164,7 @@ type internal NormalMode
                 yield ("<C-PageUp>", CommandFlags.Special, NormalCommand.GoToNextTab Path.Backward)
                 yield ("<C-q>", CommandFlags.Special, NormalCommand.SwitchMode (ModeKind.VisualBlock, ModeArgument.None))
                 yield ("<C-r>", CommandFlags.Special, NormalCommand.Redo)
+                yield ("<C-v>", CommandFlags.Special, NormalCommand.SwitchMode (ModeKind.VisualBlock, ModeArgument.None))
                 yield ("<C-w><C-j>", CommandFlags.None, NormalCommand.GoToView Direction.Down)
                 yield ("<C-w>j", CommandFlags.None, NormalCommand.GoToView Direction.Down)
                 yield ("<C-w><C-k>", CommandFlags.None, NormalCommand.GoToView Direction.Up)
@@ -197,11 +198,11 @@ type internal NormalMode
         let motionSeq = 
             seq {
                 yield ("c", CommandFlags.LinkedWithNextTextChange ||| CommandFlags.Repeatable, NormalCommand.ChangeMotion)
-                yield ("d", CommandFlags.Repeatable, NormalCommand.DeleteMotion)
+                yield ("d", CommandFlags.Repeatable ||| CommandFlags.Delete, NormalCommand.DeleteMotion)
                 yield ("gU", CommandFlags.Repeatable, (fun motion -> NormalCommand.ChangeCaseMotion (ChangeCharacterKind.ToUpperCase, motion)))
                 yield ("gu", CommandFlags.Repeatable, (fun motion -> NormalCommand.ChangeCaseMotion (ChangeCharacterKind.ToLowerCase, motion)))
                 yield ("g?", CommandFlags.Repeatable, (fun motion -> NormalCommand.ChangeCaseMotion (ChangeCharacterKind.Rot13, motion)))
-                yield ("y", CommandFlags.None, NormalCommand.Yank)
+                yield ("y", CommandFlags.Yank, NormalCommand.Yank)
                 yield ("zf", CommandFlags.None, NormalCommand.FoldMotion)
                 yield ("<lt>", CommandFlags.Repeatable, NormalCommand.ShiftMotionLinesLeft)
                 yield (">", CommandFlags.Repeatable, NormalCommand.ShiftMotionLinesRight)

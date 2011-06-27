@@ -35,6 +35,7 @@ namespace VsVim
 
         private readonly IVsAdapter _adapter;
         private readonly ITextManager _textManager;
+        private readonly IWordUtilFactory _wordUtilFactory;
         private readonly IVsEditorAdaptersFactoryService _editorAdaptersFactoryService;
         private readonly _DTE _dte;
 
@@ -51,11 +52,13 @@ namespace VsVim
             ITextManager textManager,
             ITextDocumentFactoryService textDocumentFactoryService,
             IEditorOperationsFactoryService editorOperationsFactoryService,
+            IWordUtilFactory wordUtilFactory,
             SVsServiceProvider serviceProvider)
             : base(textDocumentFactoryService, editorOperationsFactoryService)
         {
             _adapter = adapter;
             _editorAdaptersFactoryService = editorAdaptersFactoryService;
+            _wordUtilFactory = wordUtilFactory;
             _dte = (_DTE)serviceProvider.GetService(typeof(_DTE));
             _textManager = textManager;
         }
@@ -82,7 +85,8 @@ namespace VsVim
             if (target == null)
             {
                 var caretPoint = textView.Caret.Position.BufferPosition;
-                var span = TssUtil.FindCurrentFullWordSpan(caretPoint, WordKind.NormalWord);
+                var wordUtil = _wordUtilFactory.GetWordUtil(textView);
+                var span = wordUtil.GetFullWordSpan(WordKind.NormalWord, caretPoint);
                 target = span.IsSome()
                     ? span.Value.GetText()
                     : null;
@@ -106,7 +110,10 @@ namespace VsVim
             return SafeExecuteCommand(CommandNameGoToDefinition);
         }
 
-        private List<View> GetActiveViews()
+        /// <summary>
+        /// Get the list of View's in the current ViewManager DocumentGroup
+        /// </summary>
+        private static List<View> GetActiveViews()
         {
             var activeView = ViewManager.Instance.ActiveView;
             if (activeView == null)
@@ -228,8 +235,15 @@ namespace VsVim
             _textManager.CloseView(textView, checkDirty);
         }
 
+        /// <summary>
+        /// Go to the 'count' tab in the given direction.  If the count exceeds the count in
+        /// the given direction then it should wrap around to the end of the list of items
+        /// </summary>
         public override void GoToNextTab(Vim.Path direction, int count)
         {
+            // First get the index of the current tab so we know where we are incrementing
+            // from.  Make sure to check that our view is actually a part of the active
+            // views
             var children = GetActiveViews();
             var activeView = ViewManager.Instance.ActiveView;
             var index = children.IndexOf(activeView);
@@ -238,16 +252,21 @@ namespace VsVim
                 return;
             }
 
+            count = count % children.Count;
             if (direction.IsForward)
             {
                 index += count;
+                index %= children.Count;
             }
             else
             {
                 index -= count;
+                if (index < 0)
+                {
+                    index += children.Count;
+                }
             }
 
-            index %= children.Count;
             children[index].ShowInFront();
         }
 

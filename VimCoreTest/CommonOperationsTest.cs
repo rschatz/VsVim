@@ -8,7 +8,6 @@ using Moq;
 using NUnit.Framework;
 using Vim;
 using Vim.Extensions;
-using Vim.Modes;
 using Vim.UnitTest;
 using Vim.UnitTest.Mock;
 
@@ -37,7 +36,7 @@ namespace VimCore.UnitTest
 
         public void Create(params string[] lines)
         {
-            _textView = EditorUtil.CreateView(lines);
+            _textView = EditorUtil.CreateTextView(lines);
             _vimData = new VimData();
             _editorOptions = EditorUtil.FactoryService.EditorOptionsFactory.GetOptions(_textView);
             _textView.Caret.MoveTo(new SnapshotPoint(_textView.TextSnapshot, 0));
@@ -55,7 +54,7 @@ namespace VimCore.UnitTest
             _globalSettings.SetupGet(x => x.IgnoreCase).Returns(true);
             _globalSettings.SetupGet(x => x.IsVirtualEditOneMore).Returns(false);
             _globalSettings.SetupGet(x => x.UseEditorIndent).Returns(false);
-            _globalSettings.SetupGet(x => x.UseEditorTabSettings).Returns(false);
+            _globalSettings.SetupGet(x => x.UseEditorSettings).Returns(false);
             _globalSettings.SetupGet(x => x.VirtualEdit).Returns(String.Empty);
             _globalSettings.SetupGet(x => x.WrapScan).Returns(true);
             _settings = MockObjectFactory.CreateLocalSettings(_globalSettings.Object, _factory);
@@ -86,7 +85,8 @@ namespace VimCore.UnitTest
                 keyMap: null,
                 statusUtil: _statusUtil.Object,
                 foldManager: null,
-                searchService: _searchService);
+                searchService: _searchService,
+                wordUtil: VimUtil.GetWordUtil(_textView));
 
             _operationsRaw = new CommonOperations(data);
             _operations = _operationsRaw;
@@ -257,7 +257,7 @@ namespace VimCore.UnitTest
         public void JumpToMark4()
         {
             Create();
-            var view = EditorUtil.CreateView("foo", "bar");
+            var view = EditorUtil.CreateTextView("foo", "bar");
             var map = new MarkMap(new TrackingLineColumnService());
             map.SetMark(new SnapshotPoint(view.TextSnapshot, 0), 'A');
             _host.Setup(x => x.NavigateTo(new VirtualSnapshotPoint(view.TextSnapshot, 0))).Returns(false);
@@ -601,7 +601,7 @@ namespace VimCore.UnitTest
         public void ShiftLineRangeRight_NoExpandTab()
         {
             Create("cat", "dog");
-            _globalSettings.SetupGet(x => x.UseEditorTabSettings).Returns(false);
+            _globalSettings.SetupGet(x => x.UseEditorSettings).Returns(false);
             _globalSettings.SetupGet(x => x.ShiftWidth).Returns(4);
             _settings.SetupGet(x => x.ExpandTab).Returns(false);
             _operations.ShiftLineRangeRight(1);
@@ -612,9 +612,9 @@ namespace VimCore.UnitTest
         public void ShiftLineRangeRight_NoExpandTabKeepSpacesWhenFewerThanTabStop()
         {
             Create("cat", "dog");
-            _globalSettings.SetupGet(x => x.UseEditorTabSettings).Returns(false);
+            _globalSettings.SetupGet(x => x.UseEditorSettings).Returns(false);
             _globalSettings.SetupGet(x => x.ShiftWidth).Returns(2);
-            _globalSettings.SetupGet(x => x.TabStop).Returns(4);
+            _settings.SetupGet(x => x.TabStop).Returns(4);
             _settings.SetupGet(x => x.ExpandTab).Returns(false);
             _operations.ShiftLineRangeRight(1);
             Assert.AreEqual("  cat", _textView.GetLine(0).GetText());
@@ -624,7 +624,7 @@ namespace VimCore.UnitTest
         public void ShiftLineRangeRight_SpacesStartUsingTabs()
         {
             Create("  cat", "dog");
-            _globalSettings.SetupGet(x => x.UseEditorTabSettings).Returns(false);
+            _globalSettings.SetupGet(x => x.UseEditorSettings).Returns(false);
             _settings.SetupGet(x => x.ExpandTab).Returns(false);
             _settings.SetupGet(x => x.TabStop).Returns(2);
             _operations.ShiftLineRangeRight(1);

@@ -14,6 +14,8 @@ namespace VimCore.UnitTest
     {
         private IVimBuffer _buffer;
         private IWpfTextView _textView;
+        private IRegisterMap _registerMap;
+        private IVimGlobalSettings _globalSettings;
         private TestableSynchronizationContext _context;
 
         internal Register UnnamedRegister
@@ -30,11 +32,13 @@ namespace VimCore.UnitTest
         {
             _context = new TestableSynchronizationContext();
             SynchronizationContext.SetSynchronizationContext(_context);
-            var tuple = EditorUtil.CreateViewAndOperations(lines);
+            var tuple = EditorUtil.CreateTextViewAndEditorOperations(lines);
             _textView = tuple.Item1;
             var service = EditorUtil.FactoryService;
             _buffer = service.Vim.CreateBuffer(_textView);
             _buffer.SwitchMode(ModeKind.Normal, ModeArgument.None);
+            _registerMap = _buffer.RegisterMap;
+            _globalSettings = _buffer.LocalSettings.GlobalSettings;
             Assert.IsTrue(_context.IsEmpty);
 
             // Need to make sure it's focused so macro recording will work
@@ -68,12 +72,93 @@ namespace VimCore.UnitTest
             _buffer.SwitchMode(ModeKind.VisualBlock, ModeArgument.None);
         }
 
+        /// <summary>
+        /// When changing a line wise selection one blank line should be left remaining in the ITextBuffer
+        /// </summary>
+        [Test]
+        public void Change_LineWise()
+        {
+            Create("cat", "  dog", "  bear", "tree");
+            EnterMode(ModeKind.VisualLine, _textView.GetLineRange(1, 2).ExtentIncludingLineBreak);
+            _buffer.LocalSettings.AutoIndent = true;
+            _buffer.Process("c");
+            Assert.AreEqual("cat", _textView.GetLine(0).GetText());
+            Assert.AreEqual("", _textView.GetLine(1).GetText());
+            Assert.AreEqual("tree", _textView.GetLine(2).GetText());
+            Assert.AreEqual(2, _textView.Caret.Position.VirtualBufferPosition.VirtualSpaces);
+            Assert.AreEqual(_textView.GetLine(1).Start, _textView.GetCaretPoint());
+            Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
+        }
+
+        /// <summary>
+        /// When changing a word we just delete it all and put the caret at the start of the deleted
+        /// selection
+        /// </summary>
+        [Test]
+        public void Change_Word()
+        {
+            Create("cat chases the ball");
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 0, 4));
+            _buffer.LocalSettings.AutoIndent = true;
+            _buffer.Process("c");
+            Assert.AreEqual("chases the ball", _textView.GetLine(0).GetText());
+            Assert.AreEqual(0, _textView.GetCaretPoint().Position);
+            Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
+        }
+
+        /// <summary>
+        /// Make sure we handle the virtual spaces properly here.  The 'C' command should leave the caret
+        /// in virtual space due to the previous indent and escape should cause the caret to jump back to 
+        /// real spaces when leaving insert mode
+        /// </summary>
+        [Test]
+        public void ChangeLineSelection_VirtualSpaceHandling()
+        {
+            Create("  cat", "dog");
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 2, 2));
+            _buffer.Process('C');
+            _buffer.Process(VimKey.Escape);
+            Assert.AreEqual("", _textView.GetLine(0).GetText());
+            Assert.AreEqual("dog", _textView.GetLine(1).GetText());
+            Assert.AreEqual(0, _textView.GetCaretPoint().Position);
+            Assert.IsFalse(_textView.GetCaretVirtualPoint().IsInVirtualSpace);
+        }
+
+        /// <summary>
+        /// When an entire line is selected in character wise mode and then deleted
+        /// it should not be a line delete but instead delete the contents of the 
+        /// line.
+        /// </summary>
+        [Test]
+        public void Delete_CharacterWise_LineContents()
+        {
+            Create("cat", "dog");
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 0, 3));
+            _buffer.Process("x");
+            Assert.AreEqual("", _textView.GetLine(0).GetText());
+            Assert.AreEqual("dog", _textView.GetLine(1).GetText());
+        }
+
+        /// <summary>
+        /// If the character wise selection extents into the line break then the 
+        /// entire line should be deleted
+        /// </summary>
+        [Test]
+        public void Delete_CharacterWise_LineContentsFromBreak()
+        {
+            Create("cat", "dog");
+            _globalSettings.VirtualEdit = "onemore";
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLine(0).ExtentIncludingLineBreak);
+            _buffer.Process("x");
+            Assert.AreEqual("dog", _textView.GetLine(0).GetText());
+        }
+
         [Test]
         public void Repeat1()
         {
             Create("dog again", "cat again", "chicken");
             EnterMode(ModeKind.VisualLine, _textView.GetLineRange(0, 1).ExtentIncludingLineBreak);
-            _buffer.Settings.GlobalSettings.ShiftWidth = 2;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 2;
             _buffer.Process(">.");
             Assert.AreEqual("    dog again", _textView.GetLine(0).GetText());
         }
@@ -83,7 +168,7 @@ namespace VimCore.UnitTest
         {
             Create("dog again", "cat again", "chicken");
             EnterMode(ModeKind.VisualLine, _textView.GetLineRange(0, 1).ExtentIncludingLineBreak);
-            _buffer.Settings.GlobalSettings.ShiftWidth = 2;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 2;
             _buffer.Process(">..");
             Assert.AreEqual("      dog again", _textView.GetLine(0).GetText());
         }
@@ -396,6 +481,37 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// When doing a put over selection the text being deleted should be put into
+        /// the unnamed register.
+        /// </summary>
+        [Test]
+        public void PutOver_CharacterWise_NamedRegisters()
+        {
+            Create("dog", "cat");
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 0, 3));
+            _registerMap.GetRegister('c').UpdateValue("pig");
+            _buffer.Process("\"cp");
+            Assert.AreEqual("pig", _textView.GetLine(0).GetText());
+            Assert.AreEqual("dog", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
+        /// When doing a put over selection the text being deleted should be put into
+        /// the unnamed register.  If the put came from the unnamed register then the 
+        /// original put value is overwritten
+        /// </summary>
+        [Test]
+        public void PutOver_CharacterWise_UnnamedRegisters()
+        {
+            Create("dog", "cat");
+            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 0, 3));
+            UnnamedRegister.UpdateValue("pig");
+            _buffer.Process("\"cp");
+            Assert.AreEqual("pig", _textView.GetLine(0).GetText());
+            Assert.AreEqual("dog", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
         /// Character should be positioned at the end of the inserted text
         /// </summary>
         [Test]
@@ -646,24 +762,6 @@ namespace VimCore.UnitTest
             Assert.AreEqual(_textView.GetPointInLine(1, 2), _textView.GetCaretPoint());
             Assert.AreEqual(_textView.GetLineRange(0, 1).ExtentIncludingLineBreak, _textView.GetSelectionSpan());
             Assert.AreEqual(ModeKind.VisualLine, _buffer.ModeKind);
-        }
-
-        /// <summary>
-        /// Make sure we handle the virtual spaces properly here.  The 'C' command should leave the caret
-        /// in virtual space due to the previous indent and escape should cause the caret to jump back to 
-        /// real spaces when leaving insert mode
-        /// </summary>
-        [Test]
-        public void ChangeLineSelection_VirtualSpaceHandling()
-        {
-            Create("  cat", "dog");
-            EnterMode(ModeKind.VisualCharacter, _textView.GetLineSpan(0, 2, 2));
-            _buffer.Process('C');
-            _buffer.Process(VimKey.Escape);
-            Assert.AreEqual("", _textView.GetLine(0).GetText());
-            Assert.AreEqual("dog", _textView.GetLine(1).GetText());
-            Assert.AreEqual(0, _textView.GetCaretPoint().Position);
-            Assert.IsFalse(_textView.GetCaretVirtualPoint().IsInVirtualSpace);
         }
 
         /// <summary>

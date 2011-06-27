@@ -53,6 +53,12 @@ type IStatusUtil =
     /// Raised when there is a warning message that needs to be reported
     abstract OnWarning : string -> unit 
 
+/// Factory for getting IStatusUtil instances.  This is an importable MEF component
+type IStatusUtilFactory =
+
+    /// Get the IStatusUtil instance for the given ITextView
+    abstract GetStatusUtil : ITextView -> IStatusUtil
+
 /// Abstracts away VsVim's interaction with the file system to facilitate testing
 type IFileSystem =
 
@@ -74,6 +80,29 @@ type IFileSystem =
 
     /// Attempt to read all of the lines from the given file 
     abstract ReadAllLines : path:string -> string[] option
+
+/// Utility functions relating to Word values in an ITextBuffer
+type IWordUtil = 
+
+    /// The ITextBuffer associated with this word utility
+    abstract TextBuffer : ITextBuffer
+
+    /// Get the full word span for the word value which crosses the given SnapshotPoint
+    abstract GetFullWordSpan : WordKind -> SnapshotPoint -> SnapshotSpan option
+
+    /// Get the SnapshotSpan for Word values from the given point.  If the provided point is 
+    /// in the middle of a word the span of the entire word will be returned
+    abstract GetWords : WordKind -> Path -> SnapshotPoint -> SnapshotSpan seq
+
+    /// Create an ITextStructureNavigator where the extent of words is calculated for
+    /// the specified WordKind value
+    abstract CreateTextStructureNavigator : WordKind -> ITextStructureNavigator
+
+/// Factory for getting IWordUtil instances.  This is an importable MEF component
+type IWordUtilFactory = 
+
+    /// Get the IWordUtil instance for the given ITextView
+    abstract GetWordUtil : ITextView -> IWordUtil
 
 /// Wraps an ITextUndoTransaction so we can avoid all of the null checks
 type IUndoTransaction =
@@ -237,8 +266,11 @@ type MotionResultFlags =
     /// This is to cover cases where the last line is blank and an exclusive promotion
     /// under rule #1 occurs.  It's impossible for the caret movement code to tell the 
     /// difference between a blank which should be consider the last line or if the 
-    // line above is last.  This helps differentiate the two
+    /// line above is last.  This helps differentiate the two
     | ExclusivePromotionPlusOne = 0x4
+
+    /// This motion was promoted under rule #2 to a line wise motion
+    | ExclusiveLineWise = 0x8
 
 /// Information about the type of the motion this was.
 [<RequireQualifiedAccess>]
@@ -392,28 +424,31 @@ type Motion =
     /// this motion deals with lines, it's still a character wise motion motion. 
     | EndOfLine
 
-    /// Find the first non-whitespace character as the start of the span.  This is an exclusive
+    /// Find the first non-blank character as the start of the span.  This is an exclusive
     /// motion so be careful we don't go to far forward.  Providing a count to this motion has
     /// no affect
-    | FirstNonWhiteSpaceOnCurrentLine
+    | FirstNonBlankOnCurrentLine
 
-    /// Find the first non-whitespace character on the (count - 1) line below this line
-    | FirstNonWhiteSpaceOnLine
+    /// Find the first non-blank character on the (count - 1) line below this line
+    | FirstNonBlankOnLine
 
-    /// Find the last non-whitespace character on the line.  Count causes it to go "count" lines
+    /// Inner word motion
+    | InnerWord of WordKind
+
+    /// Find the last non-blank character on the line.  Count causes it to go "count" lines
     /// down and perform the search
-    | LastNonWhiteSpaceOnLine
+    | LastNonBlankOnLine
 
     /// Find the next occurrence of the last search.  The bool parameter is true if the search
     /// should be in the opposite direction
     | LastSearch of bool
 
-    /// Handle the lines down to first non-whitespace motion.  This is one of the motions which 
+    /// Handle the lines down to first non-blank motion.  This is one of the motions which 
     /// can accept a count of 0.
-    | LineDownToFirstNonWhiteSpace
+    | LineDownToFirstNonBlank
 
     /// Handle the - motion
-    | LineUpToFirstNonWhiteSpace
+    | LineUpToFirstNonBlank
 
     /// Get the span of "count" lines upward careful not to run off the beginning of the
     /// buffer.  Implementation of the "k" motion
@@ -424,10 +459,10 @@ type Motion =
     | LineDown
 
     /// Go to the specified line number or the first line if no line number is provided 
-    | LineOrFirstToFirstNonWhiteSpace
+    | LineOrFirstToFirstNonBlank
 
     /// Go to the specified line number or the last line of no line number is provided
-    | LineOrLastToFirstNonWhiteSpace
+    | LineOrLastToFirstNonBlank
 
     /// Go to the "count - 1" line from the top of the visible window.  If the count exceeds
     /// the number of visible lines it will end on the last visible line
@@ -904,6 +939,16 @@ type CommandFlags =
     /// after completing
     | ResetCaret = 0x20
 
+    /// Vim allows for special handling of the 'd' command in normal mode such that it can
+    /// have the pattern 'd#d'.  This flag is used to tag the 'd' command to allow such
+    /// a pattern
+    | Delete = 0x40
+
+    /// Vim allows for special handling of the 'y' command in normal mode such that it can
+    /// have the pattern 'y#y'.  This flag is used to tag the 'd' command to allow such
+    /// a pattern
+    | Yank = 0x80
+
 /// Data about the run of a given MotionResult
 type MotionData = {
 
@@ -1287,21 +1332,26 @@ type BindResult<'T> =
         let data = { KeyRemapMode = keyRemapModeOpt; BindFunction = bindFunc }
         NeedMoreInput data
 
-    /// Used to convert a BindResult<'T> to BindResult<'U> through a conversion
-    /// function
-    member x.Convert mapFunc = 
+    /// Used to compose to BindResult<'T> functions together by forwarding from
+    /// one to the other once the value is completed
+    member x.Map mapFunc =
         match x with
-        | Complete value -> Complete (mapFunc value)
-        | NeedMoreInput bindData -> NeedMoreInput (bindData.Convert mapFunc)
+        | Complete value -> mapFunc value
+        | NeedMoreInput bindData -> NeedMoreInput (bindData.Map mapFunc)
         | Error -> Error
         | Cancelled -> Cancelled
+
+    /// Used to convert a BindResult<'T>.Completed to BindResult<'U>.Completed through a conversion
+    /// function
+    member x.Convert convertFunc = 
+        x.Map (fun value -> convertFunc value |> BindResult.Complete)
 
 and BindData<'T> = {
 
     /// The optional KeyRemapMode which should be used when binding
     /// the next KeyInput in the sequence
     KeyRemapMode : KeyRemapMode option
-    
+
     /// Function to call to get the BindResult for this data
     BindFunction : KeyInput -> BindResult<'T>
 
@@ -1329,17 +1379,9 @@ and BindData<'T> = {
 
     /// Often types bindings need to compose together because we need an inner binding
     /// to succeed so we can create a projected value.  This function will allow us
-    /// to translate a BindData.Completed<'T> -> BindData.Completed<'U>
+    /// to translate a BindData<'T>.Completed -> BindData<'U>.Completed
     member x.Convert convertFunc = 
-
-        let rec inner bindFunction keyInput = 
-            match x.BindFunction keyInput with
-            | BindResult.Cancelled -> BindResult.Cancelled
-            | BindResult.Complete value -> BindResult.Complete (convertFunc value)
-            | BindResult.Error -> BindResult.Error
-            | BindResult.NeedMoreInput bindData -> BindResult.NeedMoreInput (bindData.Convert convertFunc)
-
-        { KeyRemapMode = x.KeyRemapMode; BindFunction = inner x.BindFunction }
+        x.Map (fun value -> convertFunc value |> BindResult.Complete)
 
     /// Very similar to the Convert function.  This will instead map a BindData<'T>.Completed
     /// to a BindData<'U> of any form 
@@ -1354,7 +1396,7 @@ and BindData<'T> = {
 
         { KeyRemapMode = x.KeyRemapMode; BindFunction = inner x.BindFunction }
 
-/// Several types of BindData<'T> need to take an actiov when a binding begins against
+/// Several types of BindData<'T> need to take an action when a binding begins against
 /// themselves.  This action needs to occur before the first KeyInput value is processed
 /// and hence they need a jump start.  The most notable is IncrementalSearch which 
 /// needs to enter 'Search' mode before processing KeyInput values so the cursor can
@@ -1666,8 +1708,11 @@ type IMotionCapture =
     /// Set of MotionBinding values supported
     abstract MotionBindings : seq<MotionBinding>
 
-    /// Get the motion starting with the given KeyInput
-    abstract GetOperatorMotion : KeyInput -> BindResult<Motion * int option>
+    /// Get the motion and count starting with the given KeyInput
+    abstract GetMotionAndCount : KeyInput -> BindResult<Motion * int option>
+
+    /// Get the motion with the provided KeyInput
+    abstract GetMotion : KeyInput -> BindResult<Motion>
 
 module CommandUtil2 = 
 
@@ -1937,10 +1982,9 @@ module GlobalSettingNames =
     let ShiftWidthName = "shiftwidth"
     let SmartCaseName = "smartcase"
     let StartOfLineName = "startofline"
-    let TabStopName = "tabstop"
     let TildeOpName = "tildeop"
     let UseEditorIndentName = "vsvim_useeditorindent"
-    let UseEditorTabSettingsName = "vsvim_useeditortabsettings"
+    let UseEditorSettingsName = "vsvim_useeditorsettings"
     let VisualBellName = "visualbell"
     let VirtualEditName = "virtualedit"
     let VimRcName = "vimrc"
@@ -2026,9 +2070,6 @@ and IVimGlobalSettings =
 
     abstract StartOfLine : bool with get, set
 
-    /// Controls how many spaces a tab counts for.
-    abstract TabStop : int with get,set
-
     /// Controls the behavior of ~ in normal mode
     abstract TildeOp : bool with get,set
 
@@ -2048,7 +2089,7 @@ and IVimGlobalSettings =
     abstract UseEditorIndent : bool with get, set
 
     /// Use the editor tab setting over the ExpandTab one
-    abstract UseEditorTabSettings : bool with get, set
+    abstract UseEditorSettings : bool with get, set
 
     /// Retrieves the location of the loaded VimRC file.  Will be the empty string if the load 
     /// did not succeed or has not been tried
@@ -2091,9 +2132,13 @@ and IVimLocalSettings =
     /// Return the handle to the global IVimSettings instance
     abstract GlobalSettings : IVimGlobalSettings
 
+    /// Whether or not to put the numbers on the left column of the display
+    abstract Number : bool with get, set
+
     /// How many spaces a tab counts for 
     abstract TabStop : int with get, set
 
+    /// The scroll size 
     abstract Scroll : int with get, set
 
     /// Which characters escape quotes for certain motion types
@@ -2161,13 +2206,15 @@ type internal IHistoryClient<'TData, 'TResult> =
     /// Beep
     abstract Beep : unit -> unit
 
-    /// Process the new string
+    /// Process the new command with the previous TData value
     abstract ProcessCommand : 'TData -> string -> 'TData
 
-    /// Called when the command is completed
+    /// Called when the command is completed.  The last valid TData and command
+    /// string will be provided
     abstract Completed : 'TData -> string -> 'TResult
 
-    /// Called when the command is cancelled
+    /// Called when the command is cancelled.  The last valid TData value will
+    /// be provided
     abstract Cancelled : 'TData -> unit
 
 /// Represents shared state which is available to all IVimBuffer instances.
@@ -2254,6 +2301,7 @@ and IVim =
     /// ISearchService for this IVim instance
     abstract SearchService : ISearchService
 
+    /// TODO: Rename GlobalSettings
     abstract Settings : IVimGlobalSettings
 
     abstract VimData : IVimData 
@@ -2280,7 +2328,10 @@ and IVim =
 
     /// Load the VimRc file.  If the file was previously loaded a new load will be 
     /// attempted.  Returns true if a VimRc was actually loaded
-    abstract LoadVimRc : IFileSystem -> createViewFunc:(unit -> ITextView) -> bool
+    ///
+    /// TODO: Should rethink this API for pushing a func down to create the 
+    /// ITextView.  Forces awkward code in host factory start methods
+    abstract LoadVimRc : createViewFunc:(unit -> ITextView) -> bool
 
     /// Remove the IVimBuffer associated with the given view.  This will not actually close
     /// the IVimBuffer but instead just removes it's association with the given view
@@ -2333,7 +2384,7 @@ and IVimBuffer =
     abstract Name : string
 
     /// Local settings for the buffer
-    abstract Settings : IVimLocalSettings
+    abstract LocalSettings : IVimLocalSettings
 
     /// Register map for IVim.  Global to all IVimBuffer instances but provided here
     /// for convenience

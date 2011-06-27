@@ -60,15 +60,18 @@ module internal Resources =
 
     let VimBuffer_AlreadyClosed = "IVimBuffer instance is already closed"
 
-    let Range_Invalid msg = sprintf "Invalid Range: %s" msg
-    let Range_MarkMissingIdentifier = Range_Invalid "Missing mark after '"
-    let Range_MarkNotValidInFile = Range_Invalid "Mark is invalid in this file"
-    let Range_EmptyRange = Range_Invalid "Expected a range"
-    let Range_ConnectionMissing = Range_Invalid "Expected , or ;"
+    let Range_Invalid = "Invalid range"
+    let Range_MarkMissingIdentifier = "Invalid Range: Missing mark after '"
+    let Range_MarkNotValidInFile = "Invalid Range: Mark is invalid in this file"
+    let Range_EmptyRange = "InvalidRange: Expected a range"
+    let Range_ConnectionMissing = "Invalid Range: Expected , or ;"
 
     let CommandRunner_CommandNameAlreadyAdded = "A Command with the given name is already present"
 
-    let UndoRedo_NotSupported = "Undo / Redo is not supported on this buffer"
-    let UndoRedo_CannotUndo = "Cannot undo the last action"
-    let UndoRedo_CannotRedo = "Cannot redo the last action"
+    let Internal_UndoRedoNotSupported = "Undo / Redo is not supported on this buffer"
+    let Internal_FoldsNotSupported = "Folds are not supported on this buffer"
+    let Internal_CannotUndo = "Cannot undo the last action"
+    let Internal_CannotRedo = "Cannot redo the last action"
+    let Internal_ErrorMappingToVisual = "Error mapping to the visual buffer defaulting to edit buffer"
+    let Internal_ErrorMappingBackToEdit = "Error mapping data back to the edit buffer"
 

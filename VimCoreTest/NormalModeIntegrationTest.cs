@@ -1,6 +1,8 @@
 ﻿using System;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Outlining;
+using Microsoft.VisualStudio.Text.Projection;
 using NUnit.Framework;
 using Vim;
 using Vim.Extensions;
@@ -19,6 +21,7 @@ namespace VimCore.UnitTest
         private IJumpList _jumpList;
         private IKeyMap _keyMap;
         private IVimData _vimData;
+        private IFoldManager _foldManager;
         private MockVimHost _vimHost;
         private bool _assertOnErrorMessage = true;
         private bool _assertOnWarningMessage = true;
@@ -30,7 +33,7 @@ namespace VimCore.UnitTest
 
         public void Create(params string[] lines)
         {
-            var tuple = EditorUtil.CreateViewAndOperations(lines);
+            var tuple = EditorUtil.CreateTextViewAndEditorOperations(lines);
             _textView = tuple.Item1;
             _textBuffer = _textView.TextBuffer;
             var service = EditorUtil.FactoryService;
@@ -52,11 +55,19 @@ namespace VimCore.UnitTest
                     }
                 };
             _keyMap = _buffer.Vim.KeyMap;
-            _globalSettings = _buffer.Settings.GlobalSettings;
+            _globalSettings = _buffer.LocalSettings.GlobalSettings;
             _jumpList = _buffer.JumpList;
             _vimHost = (MockVimHost)_buffer.Vim.VimHost;
             _vimHost.BeepCount = 0;
             _vimData = service.Vim.VimData;
+            _foldManager = EditorUtil.FactoryService.FoldManagerFactory.GetFoldManager(_textView);
+
+            // Many of the operations operate on both the visual and edit / text snapshot
+            // simultaneously.  Ensure that our setup code is producing a proper IElisionSnapshot
+            // for the Visual portion so we can root out any bad mixing of instances between
+            // the two
+            Assert.IsTrue(_textView.VisualSnapshot is IElisionSnapshot);
+            Assert.IsTrue(_textView.VisualSnapshot != _textView.TextSnapshot);
         }
 
         [TearDown]
@@ -131,16 +142,6 @@ namespace VimCore.UnitTest
             _buffer.Process(KeyInputUtil.CharToKeyInput('.'));
             _buffer.Process(KeyInputUtil.CharToKeyInput('.'));
             Assert.AreEqual("hey hehey chased the bird", _textView.TextSnapshot.GetText());
-        }
-
-        [Test]
-        [Description("See issue 288")]
-        public void dj_1()
-        {
-            Create("abc", "def", "ghi", "jkl");
-            _buffer.Process("dj");
-            Assert.AreEqual("ghi", _textView.GetLine(0).GetText());
-            Assert.AreEqual("jkl", _textView.GetLine(1).GetText());
         }
 
         [Test]
@@ -329,7 +330,7 @@ namespace VimCore.UnitTest
             var didHit = false;
             _textView.MoveCaretToLine(1);
             _assertOnWarningMessage = false;
-            _buffer.Settings.GlobalSettings.WrapScan = true;
+            _buffer.LocalSettings.GlobalSettings.WrapScan = true;
             _buffer.WarningMessage +=
                 (_, msg) =>
                 {
@@ -382,7 +383,6 @@ namespace VimCore.UnitTest
         /// using the section forward motion
         /// </summary>
         [Test]
-        [Ignore("Wait for the section last line issue to be fixed")]
         public void Move_SectionForwardFromCloseBrace()
         {
             Create("dog", "}", "bed", "cat");
@@ -397,7 +397,6 @@ namespace VimCore.UnitTest
         /// brace on the line
         /// </summary>
         [Test]
-        [Ignore("Wait for the section last line issue to be fixed")]
         public void Move_SectionFromAfterCloseBrace()
         {
             Create("dog", "} bed", "cat");
@@ -413,7 +412,6 @@ namespace VimCore.UnitTest
         /// Make sure we handle the cases of many braces in a row correctly
         /// </summary>
         [Test]
-        [Ignore("Wait for the section last line issue to be fixed")]
         public void Move_SectionBracesInARow()
         {
             Create("dog", "}", "}", "}", "cat");
@@ -438,7 +436,6 @@ namespace VimCore.UnitTest
         /// over it when using the section forward motion
         /// </summary>
         [Test]
-        [Ignore("Wait for the section last line issue to be fixed")]
         public void Move_SectionForwardFromMacro()
         {
             Create("dog", ".SH", "bed", "cat");
@@ -452,13 +449,8 @@ namespace VimCore.UnitTest
         /// <summary>
         /// Ensure the '%' motion properly moves between the block comments in the 
         /// mismatch case
-        ///
-        /// TODO: This test is broken currently because a change revealed a bug in 
-        /// matching tokens.  The caret will be on the '/' in the closing '*/' but
-        /// can't navigate from that back to the start of the comment block
         /// </summary>
         [Test]
-        [Ignore]
         public void MatchingToken_MismatchedBlockComments()
         {
             Create("/* /* */");
@@ -617,36 +609,89 @@ namespace VimCore.UnitTest
             Assert.AreEqual("cat bear", _textView.GetLine(0).GetText());
         }
 
+        /// <summary>
+        /// Ensure that we can change the character at the end of a line
+        /// </summary>
         [Test]
-        [Description("With no virtual edit the cursor should move backwards after x")]
-        public void CursorPositionWith_x_1()
+        public void Change_CharAtEndOfLine()
+        {
+            Create("hat", "cat");
+            _textView.MoveCaretTo(2);
+            _buffer.LocalSettings.GlobalSettings.VirtualEdit = String.Empty;
+            _buffer.Process("cl");
+            Assert.AreEqual("ha", _textView.GetLine(0).GetText());
+            Assert.AreEqual("cat", _textView.GetLine(1).GetText());
+            Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
+        }
+
+        /// <summary>
+        /// Ensure that we can change the character at the end of a line when 've=onemore'
+        /// </summary>
+        [Test]
+        public void Change_CharAtEndOfLine_VirtualEditOneMore()
+        {
+            Create("hat", "cat");
+            _textView.MoveCaretTo(2);
+            _buffer.LocalSettings.GlobalSettings.VirtualEdit = "onemore";
+            _buffer.Process("cl");
+            Assert.AreEqual("ha", _textView.GetLine(0).GetText());
+            Assert.AreEqual("cat", _textView.GetLine(1).GetText());
+            Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
+        }
+
+        /// <summary>
+        /// Make sure the d#d syntax doesn't apply to other commands like change.  The 'd' suffix in 'd#d' is 
+        /// *not* a valid motion
+        /// </summary>
+        [Test]
+        public void Change_Illegal()
+        {
+            Create("cat", "dog", "tree");
+            _buffer.Process("c2d");
+            Assert.AreEqual("cat", _textBuffer.GetLine(0).GetText());
+            Assert.AreEqual("dog", _textBuffer.GetLine(1).GetText());
+            Assert.AreEqual("tree", _textBuffer.GetLine(2).GetText());
+        }
+
+        /// <summary>
+        /// When virtual edit is disabled and 'x' is used to delete the last character on the line
+        /// then the caret needs to move backward to maintain the non-virtual edit position
+        /// </summary>
+        [Test]
+        public void DeleteChar_EndOfLine_NoVirtualEdit()
         {
             Create("test");
-            _buffer.Settings.GlobalSettings.VirtualEdit = string.Empty;
+            _buffer.LocalSettings.GlobalSettings.VirtualEdit = string.Empty;
             _textView.MoveCaretTo(3);
             _buffer.Process('x');
             Assert.AreEqual("tes", _textView.GetLineRange(0).GetText());
             Assert.AreEqual(2, _textView.GetCaretPoint().Position);
         }
 
+        /// <summary>
+        /// When virtual edit is enabled and 'x' is used to delete the last character on the line
+        /// then the caret should stay in it's current position 
+        /// </summary>
         [Test]
-        [Description("With virtual edit the cursor should not move and stay at the end of the line")]
-        public void CursorPositionWith_x_2()
+        public void DeleteChar_EndOfLine_VirtualEdit()
         {
             Create("test", "bar");
-            _buffer.Settings.GlobalSettings.VirtualEdit = "onemore";
+            _buffer.LocalSettings.GlobalSettings.VirtualEdit = "onemore";
             _textView.MoveCaretTo(3);
             _buffer.Process('x');
             Assert.AreEqual("tes", _textView.GetLineRange(0).GetText());
             Assert.AreEqual(3, _textView.GetCaretPoint().Position);
         }
 
+        /// <summary>
+        /// Caret position should remain unchanged when deleting a character in the middle of 
+        /// a word
+        /// </summary>
         [Test]
-        [Description("Caret position should remain the same in the middle of a word")]
-        public void CursorPositionWith_x_3()
+        public void DeleteChar_MiddleOfWord()
         {
             Create("test", "bar");
-            _buffer.Settings.GlobalSettings.VirtualEdit = string.Empty;
+            _buffer.LocalSettings.GlobalSettings.VirtualEdit = string.Empty;
             _textView.MoveCaretTo(1);
             _buffer.Process('x');
             Assert.AreEqual("tst", _textView.GetLineRange(0).GetText());
@@ -706,7 +751,7 @@ namespace VimCore.UnitTest
         public void RepeatCommand_ShiftLeft1()
         {
             Create("    bear", "    dog", "    cat", "    zebra", "    fox", "    jazz");
-            _buffer.Settings.GlobalSettings.ShiftWidth = 1;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 1;
             _buffer.Process("<<");
             _buffer.Process(".");
             Assert.AreEqual("  bear", _textView.GetLine(0).GetText());
@@ -716,7 +761,7 @@ namespace VimCore.UnitTest
         public void RepeatCommand_ShiftLeft2()
         {
             Create("    bear", "    dog", "    cat", "    zebra", "    fox", "    jazz");
-            _buffer.Settings.GlobalSettings.ShiftWidth = 1;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 1;
             _buffer.Process("2<<");
             _buffer.Process(".");
             Assert.AreEqual("  bear", _textView.GetLine(0).GetText());
@@ -727,7 +772,7 @@ namespace VimCore.UnitTest
         public void RepeatCommand_ShiftRight1()
         {
             Create("bear", "dog", "cat", "zebra", "fox", "jazz");
-            _buffer.Settings.GlobalSettings.ShiftWidth = 1;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 1;
             _buffer.Process(">>");
             _buffer.Process(".");
             Assert.AreEqual("  bear", _textView.GetLine(0).GetText());
@@ -737,7 +782,7 @@ namespace VimCore.UnitTest
         public void RepeatCommand_ShiftRight2()
         {
             Create("bear", "dog", "cat", "zebra", "fox", "jazz");
-            _buffer.Settings.GlobalSettings.ShiftWidth = 1;
+            _buffer.LocalSettings.GlobalSettings.ShiftWidth = 1;
             _buffer.Process("2>>");
             _buffer.Process(".");
             Assert.AreEqual("  bear", _textView.GetLine(0).GetText());
@@ -901,8 +946,8 @@ namespace VimCore.UnitTest
         public void RepeatCommand_TextInsert_WhiteSpaceToTab()
         {
             Create("    hello world", "dog");
-            _buffer.Settings.TabStop = 4;
-            _buffer.Settings.ExpandTab = false;
+            _buffer.LocalSettings.TabStop = 4;
+            _buffer.LocalSettings.ExpandTab = false;
             _buffer.Process('i');
             _textBuffer.Replace(new Span(0, 4), "\t\t");
             _buffer.Process(VimKey.Escape);
@@ -1220,6 +1265,22 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// When moving a line down over a fold it should not be expanded and the entire fold
+        /// should count as a single line
+        /// </summary>
+        [Test]
+        public void Move_LineDown_OverFold()
+        {
+            Create("cat", "dog", "tree", "fish");
+            var range = _textView.GetLineRange(1, 2);
+            _foldManager.CreateFold(range);
+            _buffer.Process('j');
+            Assert.AreEqual(1, _textView.GetCaretLine().LineNumber);
+            _buffer.Process('j');
+            Assert.AreEqual(3, _textView.GetCaretLine().LineNumber);
+        }
+
+        /// <summary>
         /// The 'g*' movement should update the search history for the buffer
         /// </summary>
         [Test]
@@ -1249,7 +1310,7 @@ namespace VimCore.UnitTest
         public void Handle_cc_AutoIndentShouldPreserveOnSingle()
         {
             Create("  dog", "  cat", "  tree");
-            _buffer.Settings.AutoIndent = true;
+            _buffer.LocalSettings.AutoIndent = true;
             _buffer.Process("cc");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
             Assert.AreEqual(2, _textView.GetCaretVirtualPoint().VirtualSpaces);
@@ -1260,7 +1321,7 @@ namespace VimCore.UnitTest
         public void Handle_cc_NoAutoIndentShouldRemoveAllOnSingle()
         {
             Create("  dog", "  cat");
-            _buffer.Settings.AutoIndent = false;
+            _buffer.LocalSettings.AutoIndent = false;
             _buffer.Process("cc");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
             Assert.AreEqual(0, _textView.GetCaretPoint().Position);
@@ -1274,7 +1335,7 @@ namespace VimCore.UnitTest
         public void Handle_cc_AutoIndentShouldPreserveOnMultiple()
         {
             Create("  dog", "  cat", "  tree");
-            _buffer.Settings.AutoIndent = true;
+            _buffer.LocalSettings.AutoIndent = true;
             _buffer.Process("2cc");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
             Assert.AreEqual(2, _textView.GetCaretVirtualPoint().VirtualSpaces);
@@ -1289,7 +1350,7 @@ namespace VimCore.UnitTest
         public void Handle_cc_AutoIndentShouldPreserveFirstOneOnMultiple()
         {
             Create("    dog", "  cat", "  tree");
-            _buffer.Settings.AutoIndent = true;
+            _buffer.LocalSettings.AutoIndent = true;
             _buffer.Process("2cc");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
             Assert.AreEqual(4, _textView.GetCaretVirtualPoint().VirtualSpaces);
@@ -1301,7 +1362,7 @@ namespace VimCore.UnitTest
         public void Handle_cc_NoAutoIndentShouldRemoveAllOnMultiple()
         {
             Create("  dog", "  cat", "  tree");
-            _buffer.Settings.AutoIndent = false;
+            _buffer.LocalSettings.AutoIndent = false;
             _buffer.Process("2cc");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);
             Assert.AreEqual(0, _textView.GetCaretPoint().Position);
@@ -1446,7 +1507,7 @@ namespace VimCore.UnitTest
         {
             Create("dog", "cat", "bear", "tree");
             UnnamedRegister.UpdateValue("  pig\n", OperationKind.LineWise);
-            _buffer.Settings.AutoIndent = false;
+            _buffer.LocalSettings.AutoIndent = false;
             _buffer.Process("p");
             Assert.AreEqual("dog", _textView.GetLine(0).GetText());
             Assert.AreEqual("  pig", _textView.GetLine(1).GetText());
@@ -1962,7 +2023,6 @@ namespace VimCore.UnitTest
         /// come of the '/' in a '*/'
         /// </summary>
         [Test]
-        [Ignore]
         public void MatchingTokens_DifferentTypes()
         {
             Create("{ { (( } /* a /*) b */ })");
@@ -2059,7 +2119,7 @@ namespace VimCore.UnitTest
         {
             Create("dog cat dog");
             _textView.MoveCaretTo(1);
-            _buffer.Settings.GlobalSettings.WrapScan = false;
+            _buffer.LocalSettings.GlobalSettings.WrapScan = false;
             _buffer.VimData.LastPatternData = VimUtil.CreatePatternData("dog", Path.Backward);
             _buffer.Process('/');
             _buffer.Process(VimKey.Enter);
@@ -2133,6 +2193,19 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// Make sure that 'd0' is interpreted correctly as 'd{motion}' and not 'd#d'.  0 is not 
+        /// a count
+        /// </summary>
+        [Test]
+        public void Delete_BeginingOfLine()
+        {
+            Create("dog");
+            _textView.MoveCaretTo(1);
+            _buffer.Process("d0");
+            Assert.AreEqual("og", _textView.GetLine(0).GetText());
+        }
+
+        /// <summary>
         /// Deleting a word left at the start of the line results in empty data and
         /// should not cause the register contents to be altered
         /// </summary>
@@ -2144,6 +2217,23 @@ namespace VimCore.UnitTest
             _buffer.Process("dh");
             Assert.AreEqual("hello", UnnamedRegister.StringValue);
             Assert.AreEqual(0, _vimHost.BeepCount);
+        }
+
+        /// <summary>
+        /// Delete when combined with the line down motion 'j' should delete two lines
+        /// since it's deleting the result of the motion from the caret
+        ///
+        /// Convered by issue 288
+        /// </summary>
+        [Test]
+        public void Delete_LineDown()
+        {
+            Create("abc", "def", "ghi", "jkl");
+            _textView.MoveCaretTo(1);
+            _buffer.Process("dj");
+            Assert.AreEqual("ghi", _textView.GetLine(0).GetText());
+            Assert.AreEqual("jkl", _textView.GetLine(1).GetText());
+            Assert.AreEqual(0, _textView.GetCaretPoint());
         }
 
         /// <summary>
@@ -2250,6 +2340,31 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// Delete lines with the special d#d count syntax
+        /// </summary>
+        [Test]
+        public void DeleteLines_Special_Simple()
+        {
+            Create("cat", "dog", "bear", "fish");
+            _buffer.Process("d2d");
+            Assert.AreEqual("bear", _textBuffer.GetLine(0).GetText());
+            Assert.AreEqual(2, _textBuffer.CurrentSnapshot.LineCount);
+        }
+
+
+        /// <summary>
+        /// Delete lines with both counts and make sure the counts are multiplied together
+        /// </summary>
+        [Test]
+        public void DeleteLines_Special_TwoCounts()
+        {
+            Create("cat", "dog", "bear", "fish", "tree");
+            _buffer.Process("2d2d");
+            Assert.AreEqual("tree", _textBuffer.GetLine(0).GetText());
+            Assert.AreEqual(1, _textBuffer.CurrentSnapshot.LineCount);
+        }
+
+        /// <summary>
         /// Make sure we properly update register 0 during a yank
         /// </summary>
         [Test]
@@ -2263,6 +2378,20 @@ namespace VimCore.UnitTest
             _buffer.Process("dw");
             _buffer.Process("\"0p");
             Assert.AreEqual("dog", _textView.GetLine(2).GetText());
+        }
+
+        /// <summary>
+        /// Where there are not section boundaries between the caret and the end of the 
+        /// ITextBuffer the entire ITextBuffer should be yanked when section forward 
+        /// is used
+        /// </summary>
+        [Test]
+        public void Yank_SectionForwardToEndOfBuffer()
+        {
+            Create("dog", "cat", "bear");
+            _buffer.Process("y]]");
+            Assert.AreEqual("dog" + Environment.NewLine + "cat" + Environment.NewLine + "bear", UnnamedRegister.StringValue);
+            Assert.AreEqual(OperationKind.CharacterWise, UnnamedRegister.OperationKind);
         }
 
         /// <summary>
@@ -2454,6 +2583,65 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// Doing an 'iw' yank from the start of the word should yank just the word
+        /// </summary>
+        [Test]
+        public void Yank_InnerWord_FromWordStart()
+        {
+            Create("the dog chased the ball");
+            _buffer.Process("yiw");
+            Assert.AreEqual("the", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
+        /// Doing an 'iw' yank with a count of 2 should yank the word and the trailing
+        /// white space
+        /// </summary>
+        [Test]
+        public void Yank_InnerWord_FromWordStartWithCount()
+        {
+            Create("the dog chased the ball");
+            _buffer.Process("y2iw");
+            Assert.AreEqual("the ", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
+        /// Doing an 'iw' from white space should yank the white space
+        /// </summary>
+        [Test]
+        public void Yank_InnerWord_FromWhiteSpace()
+        {
+            Create("the dog chased the ball");
+            _textView.MoveCaretTo(3);
+            _buffer.Process("y2iw");
+            Assert.AreEqual(" dog", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
+        /// Yanking a word across new lines should not count the new line as a word. Odd since
+        /// most white space is counted
+        /// </summary>
+        [Test]
+        public void Yank_InnerWord_AcrossNewLine()
+        {
+            Create("cat", "dog", "bear");
+            _buffer.Process("y2iw");
+            Assert.AreEqual("cat" + Environment.NewLine + "dog", UnnamedRegister.StringValue);
+        }
+
+        /// <summary>
+        /// Yank lines using the special y#y syntax
+        /// </summary>
+        [Test]
+        public void YankLines_Special_Simple()
+        {
+            Create("cat", "dog", "bear");
+            _buffer.Process("y2y");
+            Assert.AreEqual("cat" + Environment.NewLine + "dog" + Environment.NewLine, UnnamedRegister.StringValue);
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        /// <summary>
         /// A yank of a jump motion should update the jump list
         /// </summary>
         [Test]
@@ -2519,6 +2707,40 @@ namespace VimCore.UnitTest
             _buffer.Process("daw");
             _buffer.Process("u");
             Assert.AreEqual(0, _textView.GetCaretPoint().Position);
+        }
+
+        /// <summary>
+        /// Undoing a change lines for a single line should put the caret at the start of the
+        /// line which was changed
+        /// </summary>
+        [Test]
+        public void Undo_ChangeLines_OneLine()
+        {
+            Create("  cat");
+            _textView.MoveCaretTo(4);
+            _buffer.LocalSettings.AutoIndent = true;
+            _buffer.Process("cc");
+            _buffer.Process(VimKey.Escape);
+            _buffer.Process("u");
+            Assert.AreEqual("  cat", _textBuffer.GetLine(0).GetText());
+            Assert.AreEqual(2, _textView.GetCaretPoint());
+        }
+
+        /// <summary>
+        /// Undoing a change lines for a multiple lines should put the caret at the start of the
+        /// second line which was changed.  
+        /// </summary>
+        [Test]
+        public void Undo_ChangeLines_MultipleLines()
+        {
+            Create("dog", "  cat", "  bear", "  tree");
+            _textView.MoveCaretToLine(1);
+            _buffer.LocalSettings.AutoIndent = true;
+            _buffer.Process("3cc");
+            _buffer.Process(VimKey.Escape);
+            _buffer.Process("u");
+            Assert.AreEqual("dog", _textBuffer.GetLine(0).GetText());
+            Assert.AreEqual(_textView.GetPointInLine(2, 2), _textView.GetCaretPoint());
         }
     }
 }

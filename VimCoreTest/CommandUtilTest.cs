@@ -7,7 +7,6 @@ using Moq;
 using NUnit.Framework;
 using Vim;
 using Vim.Extensions;
-using Vim.Modes;
 using Vim.UnitTest;
 using Vim.UnitTest.Mock;
 using GlobalSettings = Vim.GlobalSettings;
@@ -32,12 +31,14 @@ namespace VimCore.UnitTest
         private ITextView _textView;
         private ITextBuffer _textBuffer;
         private IJumpList _jumpList;
+        private IFoldManager _foldManager;
         private CommandUtil _commandUtil;
 
         private void Create(params string[] lines)
         {
-            _textView = EditorUtil.CreateView(lines);
+            _textView = EditorUtil.CreateTextView(lines);
             _textBuffer = _textView.TextBuffer;
+            _foldManager = EditorUtil.FactoryService.FoldManagerFactory.GetFoldManager(_textView);
 
             _factory = new MockRepository(MockBehavior.Loose);
             _vimHost = _factory.Create<IVimHost>();
@@ -53,7 +54,7 @@ namespace VimCore.UnitTest
             _registerMap = VimUtil.CreateRegisterMap(MockObjectFactory.CreateClipboardDevice().Object);
             _markMap = new MarkMap(new TrackingLineColumnService());
             _globalSettings = new GlobalSettings();
-            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetOptions(_textView), _textView);
+            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetEditorOptions(_textView), _textView);
 
             var localSettings = new LocalSettings(new Vim.GlobalSettings());
             _motionUtil = VimUtil.CreateTextViewMotionUtil(
@@ -69,6 +70,7 @@ namespace VimCore.UnitTest
                 registerMap: _registerMap,
                 markMap: _markMap,
                 vimData: _vimData,
+                foldManager: _foldManager,
                 smartIndentationService: _smartIdentationService.Object,
                 recorder: _recorder.Object);
             _jumpList = _commandUtil._jumpList;
@@ -1305,6 +1307,33 @@ namespace VimCore.UnitTest
         }
 
         /// <summary>
+        /// When a full line is selected make sure that it doesn't include the line break
+        /// in the deletion
+        /// </summary>
+        [Test]
+        public void DeleteSelection_Character_FullLine()
+        {
+            Create("cat", "dog");
+            var visualSpan = VisualSpan.NewCharacter(_textView.GetLineSpan(0, 0, 3));
+            _commandUtil.DeleteSelection(UnnamedRegister, visualSpan);
+            Assert.AreEqual("", _textView.GetLine(0).GetText());
+            Assert.AreEqual("dog", _textView.GetLine(1).GetText());
+        }
+
+        /// <summary>
+        /// When a full line is selected and the selection extents into the line break 
+        /// then the deletion should include the entire line including the line break
+        /// </summary>
+        [Test]
+        public void DeleteSelection_Character_FullLineFromLineBreak()
+        {
+            Create("cat", "dog");
+            var visualSpan = VisualSpan.NewCharacter(_textView.GetLineSpan(0, 0, 4));
+            _commandUtil.DeleteSelection(UnnamedRegister, visualSpan);
+            Assert.AreEqual("dog", _textView.GetLine(0).GetText());
+        }
+
+        /// <summary>
         /// Make sure caret starts at the begining of the line when there is no auto-indent
         /// </summary>
         [Test]
@@ -1636,5 +1665,31 @@ namespace VimCore.UnitTest
             Assert.AreEqual(0, _jumpList.CurrentIndex.Value);
         }
 
+        /// <summary>
+        /// Ensure that yank lines does a line wise yank of the 'count' lines
+        /// from the caret
+        /// </summary>
+        [Test]
+        public void YankLines_Normal()
+        {
+            Create("cat", "dog", "bear");
+            _commandUtil.YankLines(2, UnnamedRegister);
+            Assert.AreEqual("cat" + Environment.NewLine + "dog" + Environment.NewLine, UnnamedRegister.StringValue);
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        /// <summary>
+        /// Ensure that yank lines operates against the visual buffer and will yank 
+        /// the folded text
+        /// </summary>
+        [Test]
+        public void YankLines_Overfold()
+        {
+            Create("cat", "dog", "bear", "fish");
+            _foldManager.CreateFold(_textView.GetLineRange(0, 1));
+            _commandUtil.YankLines(2, UnnamedRegister);
+            Assert.AreEqual("cat" + Environment.NewLine + "dog" + Environment.NewLine + "bear" + Environment.NewLine, UnnamedRegister.StringValue);
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
     }
 }

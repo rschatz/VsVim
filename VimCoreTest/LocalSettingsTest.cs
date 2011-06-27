@@ -14,7 +14,7 @@ namespace VimCore.UnitTest
         protected override IVimSettings Create()
         {
             var global = new Vim.GlobalSettings();
-            var view = EditorUtil.CreateView("foo");
+            var view = EditorUtil.CreateTextView("foo");
             var editorOptions = EditorUtil.FactoryService.EditorOptionsFactory.GetOptions(view);
             return new LocalSettings(global, editorOptions, view);
         }
@@ -28,8 +28,8 @@ namespace VimCore.UnitTest
         [SetUp]
         public void SetUp()
         {
-            _textView = EditorUtil.CreateView("");
-            _editorOptions = EditorUtil.GetOptions(_textView);
+            _textView = EditorUtil.CreateTextView("");
+            _editorOptions = EditorUtil.GetEditorOptions(_textView);
             _global = new GlobalSettings();
             _localRaw = new LocalSettings(_global, _editorOptions, _textView);
             _local = _localRaw;
@@ -48,33 +48,5 @@ namespace VimCore.UnitTest
         {
             Assert.AreSame(_global, _local.GlobalSettings);
         }
-
-        /// <summary>
-        /// When the UseEditorTabSettings is false we should prefer Vim settings
-        /// </summary>
-        [Test]
-        public void TabStop_UseVim()
-        {
-            _global.UseEditorTabSettings = false;
-            _editorOptions.SetOptionValue(DefaultOptions.TabSizeOptionId, 4);
-            _local.TabStop = 42;
-            Assert.AreEqual(4, _editorOptions.GetTabSize());
-            Assert.AreEqual(42, _local.TabStop);
-        }
-
-        /// <summary>
-        /// When the UseEditorTabSettings is true we should prefer Editor settings
-        /// </summary>
-        [Test]
-        public void TabStop_UseEditor()
-        {
-            _global.UseEditorTabSettings = true;
-            _editorOptions.SetOptionValue(DefaultOptions.TabSizeOptionId, 42);
-            Assert.AreEqual(42, _local.TabStop);
-            _local.TabStop = 13;
-            Assert.AreEqual(13, _local.TabStop);
-            Assert.AreEqual(13, _editorOptions.GetTabSize());
-        }
-
     }
 }

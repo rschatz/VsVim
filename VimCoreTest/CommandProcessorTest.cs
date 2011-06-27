@@ -13,7 +13,6 @@ using Vim.Extensions;
 using Vim.Modes.Command;
 using Vim.UnitTest;
 using Vim.UnitTest.Mock;
-using Vim.Modes;
 
 namespace VimCore.UnitTest
 {
@@ -39,7 +38,7 @@ namespace VimCore.UnitTest
 
         public void Create(params string[] lines)
         {
-            _textView = EditorUtil.CreateView(lines);
+            _textView = EditorUtil.CreateTextView(lines);
             _textView.Caret.MoveTo(new SnapshotPoint(_textView.TextSnapshot, 0));
             _textBuffer = _textView.TextBuffer;
             _factory = new MockRepository(MockBehavior.Strict);
@@ -136,33 +135,70 @@ namespace VimCore.UnitTest
             _operations.Verify();
         }
 
+        /// <summary>
+        /// Ensure the '$' / move to last line command is implemented properly
+        /// </summary>
         [Test]
-        public void Jump_LastLine()
+        public void LastLine()
         {
             Create("foo", "bar", "baz");
             _operations
-                .Setup(x => x.MoveCaretToPoint(_textView.GetLastLine().Start))
+                .Setup(x => x.MoveCaretToPointAndEnsureVisible(_textView.GetLastLine().Start))
                 .Verifiable();
             RunCommand("$");
             _operations.Verify();
         }
 
+        /// <summary>
+        /// Entering just a line number should jump to the corresponding Vim line number.  Note that Vim
+        /// and ITextBuffer line numbers differ as Vim begins at 1
+        /// </summary>
         [Test]
-        public void Jump_LastLineWithVimLineNumber()
+        public void Jump_UseVimLineNumber()
         {
-            Create("foo", "bar");
-            _operations.Setup(x => x.MoveCaretToPoint(_textView.GetLastLine().Start)).Verifiable();
+            Create("cat", "dog", "tree");
+            _operations.Setup(x => x.MoveCaretToPointAndEnsureVisible(_textView.GetLine(1).Start)).Verifiable();
             RunCommand("2");
-            _editOpts.Verify();
+            _operations.Verify();
         }
 
+        /// <summary>
+        /// Even though Vim line numbers begin at 1, 0 is still a valid jump to the first line number 
+        /// in Vim
+        /// </summary>
         [Test]
-        public void Jump3()
+        public void Jump_FirstLineSpecial()
         {
-            Create("foo");
-            _statusUtil.Setup(x => x.OnError(It.IsAny<string>())).Verifiable();
-            RunCommand("400");
-            _factory.Verify();
+            Create("cat", "dog", "tree");
+            _operations.Setup(x => x.MoveCaretToPointAndEnsureVisible(_textView.GetLine(0).Start)).Verifiable();
+            RunCommand("0");
+            _operations.Verify();
+        }
+
+        /// <summary>
+        /// When the line number exceeds the number of lines in the ITextBuffer it should just go to the
+        /// last line number
+        /// </summary>
+        [Test]
+        public void Jump_LineNumberTooBig()
+        {
+            Create("cat", "dog", "tree");
+            _operations.Setup(x => x.MoveCaretToPointAndEnsureVisible(_textView.GetLine(2).Start)).Verifiable();
+            RunCommand("300");
+            _operations.Verify();
+        }
+
+        /// <summary>
+        /// Whichever line is targeted the point it jumps to should be the first non space / tab character on
+        /// that line
+        /// </summary>
+        [Test]
+        public void Jump_Indent()
+        {
+            Create("cat", "  dog", "tree");
+            _operations.Setup(x => x.MoveCaretToPointAndEnsureVisible(_textView.GetPointInLine(1, 2))).Verifiable();
+            RunCommand("2");
+            _operations.Verify();
         }
 
         [Test]
@@ -200,14 +236,28 @@ namespace VimCore.UnitTest
             Assert.AreEqual(text, UnnamedRegister.StringValue);
         }
 
+        /// <summary>
+        /// Ensure that an invalid line number still registers an error with commands line yank vs. chosing
+        /// the last line in the ITextBuffer as it does for jump commands
+        /// </summary>
         [Test]
-        [Ignore("Refactoring of this code introduced a bug that needs to be fixed")]
-        public void Yank_WithRangeAndCount1()
+        public void Yank_InvalidLineNumber()
+        {
+            Create("hello", "world");
+            _statusUtil.Setup(x => x.OnError(Resources.Range_Invalid)).Verifiable();
+            RunCommand("300y");
+            _statusUtil.Verify();
+        }
+
+        /// <summary>
+        /// The count should be applied to the specified line number for yank
+        /// </summary>
+        [Test]
+        public void Yank_WithRangeAndCount()
         {
             Create("cat", "dog", "rabbit", "tree");
             RunCommand("2y 1");
-            var text = _textView.GetLineRange(0, 1).ExtentIncludingLineBreak.GetText();
-            Assert.AreEqual(text, UnnamedRegister.StringValue);
+            Assert.AreEqual("dog" + Environment.NewLine, UnnamedRegister.StringValue);
         }
 
         /// <summary>
@@ -1033,6 +1083,31 @@ namespace VimCore.UnitTest
             Create("foo");
             _statusUtil.Setup(x => x.OnError(Resources.CommandMode_CannotRun("real"))).Verifiable();
             RunCommand("real");
+            _factory.Verify();
+        }
+
+        /// <summary>
+        /// By default the retab command should affect the entire ITextBuffer and not include
+        /// space strings
+        /// </summary>
+        [Test]
+        public void Retab_Default()
+        {
+            Create("cat", "dog");
+            _commandOperations.Setup(x => x.RetabLineRange(_textBuffer.GetLineRange(0, 1), false)).Verifiable();
+            RunCommand("retab");
+            _factory.Verify();
+        }
+
+        /// <summary>
+        /// The ! operator should force the command to include spaces
+        /// </summary>
+        [Test]
+        public void Retab_WithBang()
+        {
+            Create("cat", "dog");
+            _commandOperations.Setup(x => x.RetabLineRange(_textBuffer.GetLineRange(0, 1), true)).Verifiable();
+            RunCommand("retab!");
             _factory.Verify();
         }
 

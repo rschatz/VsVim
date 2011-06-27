@@ -28,12 +28,12 @@ namespace VimCore.UnitTest
 
         private void Create(params string[] lines)
         {
-            _textView = EditorUtil.CreateView(lines);
+            _textView = EditorUtil.CreateTextView(lines);
             _globalSettings = new Vim.GlobalSettings();
             _globalSettings.IncrementalSearch = true;
             _globalSettings.WrapScan = true;
-            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetOptions(_textView), _textView);
-            _nav = VimUtil.CreateTextStructureNavigator(_textView.TextBuffer);
+            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetEditorOptions(_textView), _textView);
+            _nav = VimUtil.CreateTextStructureNavigator(_textView, WordKind.NormalWord);
             _factory = new MockRepository(MockBehavior.Strict);
             _vimHost = _factory.Create<IVimHost>();
             _vimHost.Setup(x => x.EnsureVisible(_textView, It.IsAny<SnapshotPoint>()));

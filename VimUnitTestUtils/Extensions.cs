@@ -7,7 +7,6 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using NUnit.Framework;
 using Vim.Extensions;
-using Vim.Modes;
 using Vim.Modes.Command;
 
 namespace Vim.UnitTest
@@ -30,15 +29,6 @@ namespace Vim.UnitTest
         {
             Assert.IsTrue(mode.IsSwitchModeWithArgument);
             return (ModeSwitch.SwitchModeWithArgument)mode;
-        }
-
-        #endregion
-
-        #region CountResult
-
-        internal static CountResult.NeedMore AsNeedMore(this CountResult res)
-        {
-            return (CountResult.NeedMore)res;
         }
 
         #endregion
@@ -146,9 +136,9 @@ namespace Vim.UnitTest
 
         #region IMotionCapture
 
-        public static BindResult<Tuple<Motion, FSharpOption<int>>> GetOperatorMotion(this IMotionCapture capture, char c)
+        public static BindResult<Tuple<Motion, FSharpOption<int>>> GetMotionAndCount(this IMotionCapture capture, char c)
         {
-            return capture.GetOperatorMotion(KeyInputUtil.CharToKeyInput(c));
+            return capture.GetMotionAndCount(KeyInputUtil.CharToKeyInput(c));
         }
 
         #endregion
@@ -407,10 +397,20 @@ namespace Vim.UnitTest
             return MoveCaretTo(textView, point.Position);
         }
 
+        /// <summary>
+        /// Change the selection to be the specified SnapshotSpan value and update the caret to be on the
+        /// last included point in the SnapshotSpan.  
+        /// </summary>
         public static void SelectAndUpdateCaret(this ITextView textView, SnapshotSpan span, TextSelectionMode mode = TextSelectionMode.Stream)
         {
             textView.Selection.Mode = mode;
-            textView.Selection.Select(span, false);
+
+            // The editor will normalize SnapshotSpan values here which extend into the line break
+            // portion of the line to not include the line break.  Must use VirtualSnapshotPoint 
+            // values to ensure the proper selection
+            var startPoint = span.Start.ToVirtualSnapshotPoint();
+            var endPoint = span.End.ToVirtualSnapshotPoint();
+            textView.Selection.Select(startPoint, endPoint);
             var point = span.Length > 0 ? span.End.Subtract(1) : span.Start;
             MoveCaretTo(textView, point);
         }
@@ -584,6 +584,23 @@ namespace Vim.UnitTest
         public static SnapshotSpan GetSpan(this SnapshotPoint point, int length)
         {
             return new SnapshotSpan(point, length);
+        }
+
+        /// <summary>
+        /// Convert the SnapshotPoint into a VirtualSnapshotPoint taking into account the editors
+        /// view that SnapshotPoint values in the line break should be represented as 
+        /// VirtualSnapshotPoint values
+        /// </summary>
+        public static VirtualSnapshotPoint ToVirtualSnapshotPoint(this SnapshotPoint point)
+        {
+            var line = point.GetContainingLine();
+            var difference = point.Position - line.End.Position;
+            if (difference > 0)
+            {
+                return new VirtualSnapshotPoint(line.End, difference);
+            }
+
+            return new VirtualSnapshotPoint(point);
         }
 
         #endregion
@@ -777,17 +794,17 @@ namespace Vim.UnitTest
 
         public static TextChange.Insert AsInsert(this TextChange change)
         {
-            return (TextChange.Insert) change;
+            return (TextChange.Insert)change;
         }
 
         public static TextChange.Delete AsDelete(this TextChange change)
         {
-            return (TextChange.Delete) change;
+            return (TextChange.Delete)change;
         }
 
         public static TextChange.Combination AsCombination(this TextChange change)
         {
-            return (TextChange.Combination) change;
+            return (TextChange.Combination)change;
         }
 
         public static bool IsInsert(this TextChange change, string text)

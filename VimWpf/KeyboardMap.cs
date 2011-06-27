@@ -92,7 +92,9 @@ namespace Vim.UI.Wpf
 
         /// <summary>
         /// Try and get the KeyInput which corresponds to the given Key and modifiers
-        /// TODO: really think about this method
+        ///
+        /// Warning: Think very hard before modifying this method.  It's very important to
+        /// consider non English keyboards and languages here
         /// </summary>
         internal bool TryGetKeyInput(Key key, ModifierKeys modifierKeys, out KeyInput keyInput)
         {
@@ -199,7 +201,7 @@ namespace Vim.UI.Wpf
                     charToKeyModifiersMap[current.Char] = modKeys;
                 }
 
-                // Only processing items which can map to acual keys
+                // Only processing items which can map to actual keys
                 var key = KeyInterop.KeyFromVirtualKey(virtualKeyCode);
                 if (Key.None == key)
                 {

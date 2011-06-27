@@ -23,7 +23,7 @@ namespace VimCore.UnitTest
 
         private void CreateBuffer(params string[] lines)
         {
-            var tuple = EditorUtil.CreateViewAndOperations(lines);
+            var tuple = EditorUtil.CreateTextViewAndEditorOperations(lines);
             _textView = tuple.Item1;
             var service = EditorUtil.FactoryService;
             _buffer = service.Vim.CreateBuffer(_textView);
@@ -269,7 +269,7 @@ namespace VimCore.UnitTest
         public void TestChar_o_1()
         {
             CreateBuffer("how is", "foo");
-            _buffer.Settings.GlobalSettings.UseEditorIndent = false;
+            _buffer.LocalSettings.GlobalSettings.UseEditorIndent = false;
             _textView.Caret.MoveTo(new SnapshotPoint(_textView.TextSnapshot, 0));
             _buffer.Process("o");
             Assert.AreEqual(ModeKind.Insert, _buffer.ModeKind);

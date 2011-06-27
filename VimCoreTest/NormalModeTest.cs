@@ -57,7 +57,7 @@ namespace VimCore.UnitTest
 
         public void CreateCore(IMotionUtil motionUtil, params string[] lines)
         {
-            _textView = EditorUtil.CreateView(lines);
+            _textView = EditorUtil.CreateTextView(lines);
             _textView.Caret.MoveTo(new SnapshotPoint(_textView.TextSnapshot, 0));
             _map = VimUtil.CreateRegisterMap(MockObjectFactory.CreateClipboardDevice().Object);
             _unnamedRegister = _map.GetRegister(RegisterName.Unnamed);
@@ -76,7 +76,7 @@ namespace VimCore.UnitTest
             _vimData = new VimData();
 
             _globalSettings = new Vim.GlobalSettings();
-            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetOptions(_textView), _textView);
+            _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetEditorOptions(_textView), _textView);
             motionUtil = motionUtil ?? VimUtil.CreateTextViewMotionUtil(
                 _textView,
                 new MarkMap(new TrackingLineColumnService()),
@@ -97,7 +97,7 @@ namespace VimCore.UnitTest
                 _host.Object,
                 _textView,
                 _incrementalSearch.Object,
-                new LocalSettings(new GlobalSettings(), EditorUtil.GetOptions(_textView), _textView));
+                new LocalSettings(new GlobalSettings(), EditorUtil.GetEditorOptions(_textView), _textView));
             var runner = new CommandRunner(_textView, _map, capture, _commandUtil.Object, _statusUtil.Object, VisualKind.Character);
             _modeRaw = new NormalMode(
                 _buffer.Object,
@@ -374,7 +374,7 @@ namespace VimCore.UnitTest
         public void Bind_Motion_Hat()
         {
             Create("   foo bar");
-            _commandUtil.SetupCommandNormal(NormalCommand.NewMoveCaretToMotion(Motion.FirstNonWhiteSpaceOnCurrentLine));
+            _commandUtil.SetupCommandNormal(NormalCommand.NewMoveCaretToMotion(Motion.FirstNonBlankOnCurrentLine));
             _mode.Process('^');
             _commandUtil.Verify();
         }
@@ -401,7 +401,7 @@ namespace VimCore.UnitTest
         public void Bind_Motion_LineOrFirst()
         {
             Create(DefaultLines);
-            _commandUtil.SetupCommandNormal(NormalCommand.NewMoveCaretToMotion(Motion.LineOrFirstToFirstNonWhiteSpace));
+            _commandUtil.SetupCommandNormal(NormalCommand.NewMoveCaretToMotion(Motion.LineOrFirstToFirstNonBlank));
             _mode.Process(KeyNotationUtil.StringToKeyInput("<C-Home>"));
             _commandUtil.Verify();
         }
@@ -579,7 +579,7 @@ namespace VimCore.UnitTest
             var span = _textView.GetLine(0).Extent;
             var arg = new MotionArgument(MotionContext.AfterOperator, FSharpOption<int>.None, FSharpOption<int>.None);
             util
-                .Setup(x => x.GetMotion(Motion.LineOrLastToFirstNonWhiteSpace, arg))
+                .Setup(x => x.GetMotion(Motion.LineOrLastToFirstNonBlank, arg))
                 .Returns(FSharpOption.Create(VimUtil.CreateMotionResult(span, motionKind: MotionKind.NewLineWise(CaretColumn.None))));
             _commandUtil
                 .Setup(x => x.RunCommand(It.Is<Command>(y => y.AsNormalCommand().Item2.Count.IsNone())))

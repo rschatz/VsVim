@@ -82,7 +82,7 @@ type internal MotionCapture
                 yield (
                     "^", 
                     MotionFlags.CursorMovement,
-                    Motion.FirstNonWhiteSpaceOnCurrentLine)
+                    Motion.FirstNonBlankOnCurrentLine)
                 yield (
                     "0", 
                     MotionFlags.CursorMovement,
@@ -154,19 +154,19 @@ type internal MotionCapture
                 yield (
                     "+", 
                     MotionFlags.CursorMovement,
-                    Motion.LineDownToFirstNonWhiteSpace)
+                    Motion.LineDownToFirstNonBlank)
                 yield (
                     "_", 
                     MotionFlags.CursorMovement,
-                    Motion.FirstNonWhiteSpaceOnLine)
+                    Motion.FirstNonBlankOnLine)
                 yield (
                     "<C-m>", 
                     MotionFlags.CursorMovement,
-                    Motion.LineDownToFirstNonWhiteSpace)
+                    Motion.LineDownToFirstNonBlank)
                 yield (
                     "-", 
                     MotionFlags.CursorMovement,
-                    Motion.LineUpToFirstNonWhiteSpace)
+                    Motion.LineUpToFirstNonBlank)
                 yield (
                     "(", 
                     MotionFlags.CursorMovement,
@@ -186,7 +186,7 @@ type internal MotionCapture
                 yield (
                     "g_", 
                     MotionFlags.CursorMovement,
-                    Motion.LastNonWhiteSpaceOnLine)
+                    Motion.LastNonBlankOnLine)
                 yield (
                     "aw", 
                     MotionFlags.TextObjectSelection,
@@ -326,7 +326,7 @@ type internal MotionCapture
                 yield (
                     "G", 
                     MotionFlags.CursorMovement,
-                    Motion.LineOrLastToFirstNonWhiteSpace)
+                    Motion.LineOrLastToFirstNonBlank)
                 yield (
                     "H", 
                     MotionFlags.CursorMovement,
@@ -354,11 +354,11 @@ type internal MotionCapture
                 yield ( 
                     "gg", 
                     MotionFlags.CursorMovement,
-                    Motion.LineOrFirstToFirstNonWhiteSpace)
+                    Motion.LineOrFirstToFirstNonBlank)
                 yield ( 
                     "<C-Home>", 
                     MotionFlags.CursorMovement,
-                    Motion.LineOrFirstToFirstNonWhiteSpace)
+                    Motion.LineOrFirstToFirstNonBlank)
                 yield (
                     "n",
                     MotionFlags.CursorMovement,
@@ -383,6 +383,14 @@ type internal MotionCapture
                     "g#",
                     MotionFlags.CursorMovement,
                     Motion.NextPartialWord Path.Backward)
+                yield (
+                    "iw",
+                    MotionFlags.TextObjectSelection,
+                    Motion.InnerWord WordKind.NormalWord)
+                yield (
+                    "iW",
+                    MotionFlags.TextObjectSelection,
+                    Motion.InnerWord WordKind.BigWord)
             } 
             
         motionSeq 
@@ -440,25 +448,25 @@ type internal MotionCapture
 
     let MotionBindingsMap = AllMotionsCore |> Seq.map (fun command ->  (command.KeyInputSet, command)) |> Map.ofSeq
 
-    /// This continuation will run until the name of the motion is complete, 
-    /// errors or is cancelled by the user
-    member x.WaitForMotionName ki motionCountOpt =
-        let rec inner (previousName : KeyInputSet) (ki : KeyInput) =
-            if ki = KeyInputUtil.EscapeKey then 
+    /// Get the Motion value for the given KeyInput.  Will return a BindResult<Motion> which 
+    /// digs through the values until a valid Motion result is detected 
+    member x.GetMotion keyInput = 
+        let rec inner (previousName : KeyInputSet) keyInput =
+            if keyInput = KeyInputUtil.EscapeKey then 
                 // User hit escape so abandon the motion
                 BindResult.Cancelled 
             else
-                let name = previousName.Add ki
+                let name = previousName.Add keyInput
                 match Map.tryFind name MotionBindingsMap with
                 | Some(command) -> 
                     match command with 
                     | MotionBinding.Simple (_, _ , motion) -> 
                         // Simple motions don't need any extra information so we can 
                         // return them directly
-                        BindResult.Complete (motion, motionCountOpt)
+                        BindResult.Complete motion
                     | MotionBinding.Complex (_, _, bindDataStorage) -> 
                         // Complex motions need further input so delegate off
-                        let bindData = bindDataStorage.CreateBindData().Convert (fun motion -> (motion, motionCountOpt))
+                        let bindData = bindDataStorage.CreateBindData()
                         BindResult.NeedMoreInput bindData
                 | None -> 
                     let res = MotionBindingsMap |> Seq.filter (fun pair -> pair.Key.StartsWith name) 
@@ -467,28 +475,18 @@ type internal MotionCapture
                     else 
                         let bindData = { KeyRemapMode = None; BindFunction = inner name }
                         BindResult.NeedMoreInput bindData
-        inner Empty ki
+        inner Empty keyInput
 
-    /// Wait for the completion of the motion count
-    member x.WaitforCount ki =
-        let rec inner (processFunc: KeyInput->CountResult) (ki:KeyInput)  =               
-            if ki = KeyInputUtil.EscapeKey then 
-                BindResult.Cancelled 
-            else
-                match processFunc ki with 
-                | CountResult.Complete(count,nextKi) -> 
-                    x.WaitForMotionName nextKi (Some count)
-                | NeedMore(nextFunc) -> 
-                    BindResult<MotionData>.CreateNeedMoreInput None (inner nextFunc)
-        inner (CountCapture.Process) ki
-
-    member x.GetOperatorMotion (ki : KeyInput) =
-        if ki = KeyInputUtil.EscapeKey then BindResult.Cancelled
-        elif ki.IsDigit && ki.Char <> '0' then x.WaitforCount ki
-        else x.WaitForMotionName ki None
+    /// Get the Motion value and associated count beginning with the specified KeyInput value
+    member x.GetMotionAndCount keyInput =
+        let result = CountCapture.GetCount None keyInput
+        result.Map (fun (count, keyInput) -> 
+            let result = x.GetMotion keyInput
+            result.Convert (fun motion -> (motion, count)))
 
     interface IMotionCapture with
         member x.TextView = _textView
         member x.MotionBindings = MotionBindings
-        member x.GetOperatorMotion ki = x.GetOperatorMotion ki
+        member x.GetMotionAndCount ki = x.GetMotionAndCount ki
+        member x.GetMotion ki = x.GetMotion ki
 

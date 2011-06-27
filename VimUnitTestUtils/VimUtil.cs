@@ -6,7 +6,6 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Operations;
 using Microsoft.VisualStudio.Text.Outlining;
 using Vim.Extensions;
-using Vim.Modes;
 using Vim.UnitTest.Mock;
 
 namespace Vim.UnitTest
@@ -23,14 +22,20 @@ namespace Vim.UnitTest
             IVimData vimData = null,
             IVimHost vimHost = null,
             IClipboardDevice clipboardDevice = null,
-            IFoldManager foldManager = null)
+            IFoldManager foldManager = null,
+            IWordUtil wordUtil = null)
         {
-            var editorOperations = EditorUtil.GetOperations(textView);
+            var editorOperations = EditorUtil.GetEditorOperations(textView);
             var editorOptions = EditorUtil.FactoryService.EditorOptionsFactory.GetOptions(textView);
             var jumpList = new JumpList(new TrackingLineColumnService());
             var keyMap = new KeyMap();
-            foldManager = foldManager ?? new FoldManager(textView.TextBuffer);
+            wordUtil = wordUtil ?? GetWordUtil(textView);
             statusUtil = statusUtil ?? new StatusUtil();
+            foldManager = foldManager ?? new FoldManager(
+                textView, 
+                new FoldData(textView.TextBuffer),
+                statusUtil, 
+                FSharpOption.Create(EditorUtil.FactoryService.OutliningManagerService.GetOutliningManager(textView)));
             searchService = searchService ?? CreateSearchService(localSettings.GlobalSettings);
             undoRedoOperations = undoRedoOperations ??
                                  new UndoRedoOperations(statusUtil, FSharpOption<ITextUndoHistory>.None, editorOperations);
@@ -51,7 +56,8 @@ namespace Vim.UnitTest
                 textView,
                 undoRedoOperations,
                 vimData,
-                vimHost);
+                vimHost,
+                wordUtil);
             return new CommonOperations(operationsData);
         }
 
@@ -64,14 +70,16 @@ namespace Vim.UnitTest
             IJumpList jumpList = null,
             IStatusUtil statusUtil = null,
             IVimData vimData = null,
-            IEditorOptions editorOptions = null)
+            IEditorOptions editorOptions = null,
+            IWordUtil wordUtil = null)
         {
             markMap = markMap ?? new MarkMap(new TrackingLineColumnService());
             settings = settings ?? new LocalSettings(new GlobalSettings(), FSharpOption.CreateForReference(editorOptions), FSharpOption.CreateForReference(textView));
             search = search ?? CreateSearchService(settings.GlobalSettings);
-            navigator = navigator ?? CreateTextStructureNavigator(textView.TextBuffer);
+            navigator = navigator ?? CreateTextStructureNavigator(textView, WordKind.NormalWord);
             jumpList = jumpList ?? CreateJumpList();
             statusUtil = statusUtil ?? new StatusUtil();
+            wordUtil = wordUtil ?? GetWordUtil(textView);
             vimData = vimData ?? new VimData();
             return new MotionUtil(
                 textView,
@@ -81,6 +89,7 @@ namespace Vim.UnitTest
                 navigator,
                 jumpList,
                 statusUtil,
+                wordUtil,
                 vimData);
         }
 
@@ -122,9 +131,9 @@ namespace Vim.UnitTest
             motionUtil = motionUtil ?? CreateTextViewMotionUtil(textView, markMap: markMap, vimData: vimData, settings: localSettings);
             operations = operations ?? CreateCommonOperations(textView, localSettings, vimData: vimData, statusUtil: statusUtil);
             smartIndentationService = smartIndentationService ?? CreateSmartIndentationService();
-            foldManager = foldManager ?? CreateFoldManager(textView.TextBuffer);
+            foldManager = foldManager ?? EditorUtil.FactoryService.FoldManagerFactory.GetFoldManager(textView);
             searchService = searchService ?? CreateSearchService(localSettings.GlobalSettings);
-            wordNavigator = wordNavigator ?? CreateTextStructureNavigator(textView.TextBuffer, WordKind.NormalWord);
+            wordNavigator = wordNavigator ?? CreateTextStructureNavigator(textView, WordKind.NormalWord);
             jumpList = jumpList ?? CreateJumpList();
             vimHost = vimHost ?? new MockVimHost();
             var vim = MockObjectFactory.CreateVim(
@@ -153,11 +162,6 @@ namespace Vim.UnitTest
         internal static ISmartIndentationService CreateSmartIndentationService()
         {
             return EditorUtil.FactoryService.SmartIndentationService;
-        }
-
-        internal static FoldManager CreateFoldManager(ITextBuffer textBuffer)
-        {
-            return new FoldManager(textBuffer);
         }
 
         internal static UndoRedoOperations CreateUndoRedoOperations(IStatusUtil statusUtil = null)
@@ -207,15 +211,20 @@ namespace Vim.UnitTest
             return CommandBinding.NewNormalBinding(commandName, CommandFlags.None, command);
         }
 
-        internal static ITextStructureNavigator CreateTextStructureNavigator(ITextBuffer textBuffer)
-        {
-            return EditorUtil.FactoryService.TextStructureNavigatorSelectorService.GetTextStructureNavigator(textBuffer);
-        }
-
         internal static ITextStructureNavigator CreateTextStructureNavigator(ITextBuffer textBuffer, WordKind kind)
         {
-            var navigator = CreateTextStructureNavigator(textBuffer);
-            return TssUtil.CreateTextStructureNavigator(kind, navigator);
+            var textView = EditorUtil.FactoryService.TextEditorFactory.CreateTextView(textBuffer);
+            return CreateTextStructureNavigator(textView, kind);
+        }
+
+        internal static ITextStructureNavigator CreateTextStructureNavigator(ITextView textView, WordKind kind)
+        {
+            return GetWordUtil(textView).CreateTextStructureNavigator(kind);
+        }
+
+        internal static IWordUtil GetWordUtil(ITextView textView)
+        {
+            return EditorUtil.FactoryService.WordUtilFactory.GetWordUtil(textView);
         }
 
         internal static CommandRunData CreateCommandRunData(
@@ -394,7 +403,7 @@ namespace Vim.UnitTest
             vimData = vimData ?? new VimData();
             search = search ?? CreateSearchService(settings.GlobalSettings);
             statusUtil = statusUtil ?? new StatusUtil();
-            var nav = CreateTextStructureNavigator(textView.TextBuffer);
+            var nav = CreateTextStructureNavigator(textView, WordKind.NormalWord);
             var operations = CreateCommonOperations(
                 textView: textView,
                 localSettings: settings,

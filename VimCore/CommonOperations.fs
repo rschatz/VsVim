@@ -48,6 +48,7 @@ type OperationsData = {
     UndoRedoOperations : IUndoRedoOperations
     VimData : IVimData
     VimHost : IVimHost
+    WordUtil : IWordUtil
 }
 
 type internal CommonOperations ( _data : OperationsData ) =
@@ -66,6 +67,7 @@ type internal CommonOperations ( _data : OperationsData ) =
     let _search = _data.SearchService
     let _regexFactory = VimRegexFactory(_data.LocalSettings.GlobalSettings)
     let _globalSettings = _settings.GlobalSettings
+    let _wordUtil = _data.WordUtil
 
     member x.CurrentSnapshot = _textBuffer.CurrentSnapshot
 
@@ -147,6 +149,12 @@ type internal CommonOperations ( _data : OperationsData ) =
         TextViewUtil.MoveCaretToPoint _textView point
         x.EnsureCaretOnScreen()
 
+    /// Move the caret to the specified point and ensure it's on screen.  Does not expand the 
+    /// surrounding text if this is in the middle of a collapsed region
+    member x.MoveCaretToPointAndEnsureOnScreen point = 
+        TextViewUtil.MoveCaretToPoint _textView point
+        x.EnsureCaretOnScreen()
+
     /// Move the caret to the position dictated by the given MotionResult value
     member x.MoveCaretToMotionResult (result : MotionResult) =
 
@@ -215,14 +223,21 @@ type internal CommonOperations ( _data : OperationsData ) =
                     | CaretColumn.AfterLastLine ->
                         getAfterLastLine()
 
-        x.MoveCaretToPointAndEnsureVisible point
+        if result.OperationKind = OperationKind.LineWise && not (Util.IsFlagSet result.MotionResultFlags MotionResultFlags.ExclusiveLineWise) then
+            // Line wise motions should not cause any collapsed regions to be expanded.  Instead they
+            // should leave the regions collapsed and just move the point into the region
+            x.MoveCaretToPointAndEnsureOnScreen point
+        else
+            // Character wise motions should expand regions
+            x.MoveCaretToPointAndEnsureVisible point
+
         x.MoveCaretForVirtualEdit()
         _operations.ResetSelection()
 
     /// Return the full word under the cursor or an empty string
     member x.WordUnderCursorOrEmpty =
         let point =  TextViewUtil.GetCaretPoint _textView
-        TssUtil.FindCurrentFullWordSpan point WordKind.BigWord
+        _wordUtil.GetFullWordSpan WordKind.BigWord point 
         |> OptionUtil.getOrDefault (SnapshotSpanUtil.CreateEmpty point)
         |> SnapshotSpanUtil.GetText
 
@@ -235,18 +250,18 @@ type internal CommonOperations ( _data : OperationsData ) =
 
     /// Convert the provided whitespace into spaces.  The conversion of tabs into spaces will be 
     /// done based on the TabSize setting
-    member x.GetAndNormalizeLeadingWhiteSpaceToSpaces span = 
+    member x.GetAndNormalizeLeadingBlanksToSpaces span = 
         let text = 
             span
             |> SnapshotSpanUtil.GetText
-            |> Seq.takeWhile CharUtil.IsSpaceOrTab
+            |> Seq.takeWhile CharUtil.IsBlank
             |> StringUtil.ofCharSeq
-        x.NormalizeWhiteSpaceToSpaces text, text.Length
+        x.NormalizeBlanksToSpaces text, text.Length
 
-    /// Normalize any white space to the appropriate number of space characters based on the 
+    /// Normalize any blanks to the appropriate number of space characters based on the 
     /// Vim settings
-    member x.NormalizeWhiteSpaceToSpaces (text : string) =
-        Contract.Assert(StringUtil.isSpacesAndTabs text)
+    member x.NormalizeBlanksToSpaces (text : string) =
+        Contract.Assert(StringUtil.isBlanks text)
         let builder = System.Text.StringBuilder()
         let tabSize = _settings.TabStop
         for c in text do
@@ -279,10 +294,10 @@ type internal CommonOperations ( _data : OperationsData ) =
 
     /// Fully normalize white space into tabs / spaces based on the ExpandTab, TabSize 
     /// settings
-    member x.NormalizeSpacesAndTabs text = 
-        Contract.Assert(StringUtil.isSpacesAndTabs text)
+    member x.NormalizeBlanks text = 
+        Contract.Assert(StringUtil.isBlanks text)
         text
-        |> x.NormalizeWhiteSpaceToSpaces
+        |> x.NormalizeBlanksToSpaces
         |> x.NormalizeSpaces
 
     /// Shifts a block of lines to the left
@@ -299,7 +314,7 @@ type internal CommonOperations ( _data : OperationsData ) =
                 let line = SnapshotPointUtil.GetContainingLine span.Start
                 SnapshotSpan(span.Start, line.End)
 
-            let ws, originalLength = x.GetAndNormalizeLeadingWhiteSpaceToSpaces span
+            let ws, originalLength = x.GetAndNormalizeLeadingBlanksToSpaces span
             let ws = 
                 let length = max (ws.Length - count) 0
                 StringUtil.repeatChar length ' ' |> x.NormalizeSpaces
@@ -317,7 +332,7 @@ type internal CommonOperations ( _data : OperationsData ) =
 
         col |> Seq.iter (fun span ->
             // Get the span we are formatting within the line
-            let ws, originalLength = x.GetAndNormalizeLeadingWhiteSpaceToSpaces span
+            let ws, originalLength = x.GetAndNormalizeLeadingBlanksToSpaces span
             let ws = x.NormalizeSpaces (ws + shiftText)
             edit.Replace(span.Start.Position, originalLength, ws) |> ignore)
 
@@ -334,7 +349,7 @@ type internal CommonOperations ( _data : OperationsData ) =
 
             // Get the span we are formatting within the line
             let span = line.Extent
-            let ws, originalLength = x.GetAndNormalizeLeadingWhiteSpaceToSpaces span
+            let ws, originalLength = x.GetAndNormalizeLeadingBlanksToSpaces span
             let ws = 
                 let length = max (ws.Length - count) 0
                 StringUtil.repeatChar length ' ' |> x.NormalizeSpaces
@@ -354,14 +369,14 @@ type internal CommonOperations ( _data : OperationsData ) =
 
             // Get the span we are formatting within the line
             let span = line.Extent
-            let ws, originalLength = x.GetAndNormalizeLeadingWhiteSpaceToSpaces span
+            let ws, originalLength = x.GetAndNormalizeLeadingBlanksToSpaces span
             let ws = x.NormalizeSpaces (ws + shiftText)
             edit.Replace(line.Start.Position, originalLength, ws) |> ignore)
         edit.Apply() |> ignore
 
     /// Convert the provided whitespace into spaces.  The conversion of 
     /// tabs into spaces will be done based on the TabSize setting
-    member x.GetAndNormalizeLeadingWhitespaceToSpaces line = 
+    member x.GetAndNormalizeLeadingBlanksToSpaces line = 
         let text = 
             line
             |> SnapshotLineUtil.GetText
@@ -579,7 +594,7 @@ type internal CommonOperations ( _data : OperationsData ) =
                 _jumpList.Add before |> ignore
                 Result.Succeeded
             else
-                match TssUtil.FindCurrentFullWordSpan _textView.Caret.Position.BufferPosition Vim.WordKind.BigWord with
+                match _wordUtil.GetFullWordSpan WordKind.BigWord _textView.Caret.Position.BufferPosition with
                 | Some(span) -> 
                     let msg = Resources.Common_GotoDefFailed (span.GetText())
                     Result.Failed(msg)
@@ -639,64 +654,8 @@ type internal CommonOperations ( _data : OperationsData ) =
         member x.MoveCaretToPoint point =  TextViewUtil.MoveCaretToPoint _textView point 
         member x.MoveCaretToPointAndEnsureVisible point = x.MoveCaretToPointAndEnsureVisible point
         member x.MoveCaretToMotionResult data = x.MoveCaretToMotionResult data
-        member x.NormalizeSpacesAndTabs text = x.NormalizeSpacesAndTabs text
-
-        member x.OpenFold span count = 
-            x.DoWithOutlining (fun outlining ->
-                let regions = outlining.GetCollapsedRegions(span) |> Seq.truncate count
-                if Seq.isEmpty regions then _statusUtil.OnError Resources.Common_NoFoldFound
-                else  regions |> Seq.iter (fun x -> outlining.Expand(x) |> ignore ))
-
-        member x.OpenAllFolds span =
-            x.DoWithOutlining (fun outlining ->
-                let regions = outlining.GetCollapsedRegions(span) 
-                if Seq.isEmpty regions then _statusUtil.OnError Resources.Common_NoFoldFound
-                else  regions |> Seq.iter (fun x -> outlining.Expand(x) |> ignore ))
-
-        member x.CloseFold span count = 
-            x.DoWithOutlining (fun outlining ->
-                let pos = span |> SnapshotSpanUtil.GetStartPoint |> SnapshotPointUtil.GetPosition
-                let temp = 
-                    outlining.GetAllRegions(span) 
-                    |> Seq.filter (fun x -> not (x.IsCollapsed))
-                    |> Seq.map (fun x -> (TrackingSpanUtil.GetSpan _textView.TextSnapshot x.Extent) ,x)
-                    |> SeqUtil.filterToSome2
-                    |> Seq.sortBy (fun (span,_) -> pos - span.Start.Position )
-                    |> List.ofSeq
-                let regions = temp  |> Seq.truncate count
-                if Seq.isEmpty regions then _statusUtil.OnError Resources.Common_NoFoldFound
-                else regions |> Seq.iter (fun (_,x) -> outlining.TryCollapse(x) |> ignore))
-
-        member x.CloseAllFolds span =
-            x.DoWithOutlining (fun outlining ->
-                let regions = outlining.GetAllRegions(span) 
-                if Seq.isEmpty regions then _statusUtil.OnError Resources.Common_NoFoldFound
-                else  regions |> Seq.iter (fun x -> outlining.TryCollapse(x) |> ignore ))
-
-        member x.FoldLines count = 
-            if count > 1 then 
-                let caretLine = TextViewUtil.GetCaretLine _textView
-                let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount caretLine count
-                _data.FoldManager.CreateFold range
-
-        member x.FormatLines range =
-            _host.FormatLines _textView range
-
-        member x.DeleteOneFoldAtCursor () = 
-            let point = TextViewUtil.GetCaretPoint _textView
-            if not ( _data.FoldManager.DeleteFold point ) then
-                _statusUtil.OnError Resources.Common_NoFoldFound
-
-        member x.DeleteAllFoldsAtCursor () =
-            let deleteAtCaret () = 
-                let point = TextViewUtil.GetCaretPoint _textView
-                _data.FoldManager.DeleteFold point
-            if not (deleteAtCaret()) then
-                _statusUtil.OnError Resources.Common_NoFoldFound
-            else
-                while deleteAtCaret() do
-                    // Keep on deleteing 
-                    ()
+        member x.NormalizeBlanks text = x.NormalizeBlanks text
+        member x.FormatLines range = _host.FormatLines _textView range
 
         member x.Substitute pattern replace (range:SnapshotLineRange) flags = 
 
@@ -832,7 +791,9 @@ type CommonOperationsFactory
         _editorOptionsFactoryService : IEditorOptionsFactoryService,
         _outliningManagerService : IOutliningManagerService,
         _undoManagerProvider : ITextBufferUndoManagerProvider,
-        _foldManagerFactory : IFoldManagerFactory ) = 
+        _foldManagerFactory : IFoldManagerFactory,
+        _wordUtilFactory : IWordUtilFactory
+    ) = 
 
     /// Use an object instance as a key.  Makes it harder for components to ignore this
     /// service and instead manually query by a predefined key
@@ -849,7 +810,7 @@ type CommonOperationsFactory
             // as TFS annotated buffers.
             let ret = _outliningManagerService.GetOutliningManager(textView)
             if ret = null then None else Some ret
-        let foldManager = _foldManagerFactory.GetFoldManager(textView.TextBuffer)
+        let foldManager = _foldManagerFactory.GetFoldManager textView
 
         let vim = bufferData.Vim
         let operationsData = { 
@@ -866,19 +827,14 @@ type CommonOperationsFactory
             TextView = textView
             UndoRedoOperations = bufferData.UndoRedoOperations
             VimData = vim.VimData
-            VimHost = vim.VimHost }
+            VimHost = vim.VimHost
+            WordUtil = _wordUtilFactory.GetWordUtil textView }
         CommonOperations(operationsData) :> ICommonOperations
 
     /// Get or create the ICommonOperations for the given buffer
     member x.GetCommonOperations (bufferData : VimBufferData) = 
         let properties = bufferData.TextView.Properties
-        let found, value = properties.TryGetProperty<ICommonOperations>(_key)
-        if found then 
-            value
-        else
-            let value = x.CreateCommonOperations bufferData
-            properties.AddProperty(_key, value)
-            value
+        properties.GetOrCreateSingletonProperty(_key, (fun () -> x.CreateCommonOperations bufferData))
 
     interface ICommonOperationsFactory with
         member x.GetCommonOperations bufferData = x.GetCommonOperations bufferData

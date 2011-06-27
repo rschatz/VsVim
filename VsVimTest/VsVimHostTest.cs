@@ -24,6 +24,7 @@ namespace VsVim.UnitTest
         private Mock<IVsEditorAdaptersFactoryService> _editorAdaptersFactoryService;
         private Mock<ITextBufferUndoManagerProvider> _undoManagerProvider;
         private Mock<IEditorOperationsFactoryService> _editorOperationsFactoryService;
+        private Mock<IWordUtilFactory> _wordUtilFactory;
         private Mock<_DTE> _dte;
         private Mock<IVsUIShell4> _shell;
         private Mock<StatusBar> _statusBar;
@@ -35,6 +36,7 @@ namespace VsVim.UnitTest
             _undoManagerProvider = _factory.Create<ITextBufferUndoManagerProvider>();
             _editorAdaptersFactoryService = _factory.Create<IVsEditorAdaptersFactoryService>();
             _editorOperationsFactoryService = _factory.Create<IEditorOperationsFactoryService>();
+            _wordUtilFactory = _factory.Create<IWordUtilFactory>();
             _statusBar = _factory.Create<StatusBar>();
             _shell = _factory.Create<IVsUIShell4>();
             _dte = _factory.Create<_DTE>();
@@ -51,6 +53,7 @@ namespace VsVim.UnitTest
                 _textManager.Object,
                 _factory.Create<ITextDocumentFactoryService>().Object,
                 _editorOperationsFactoryService.Object,
+                _wordUtilFactory.Object,
                 sp.Object);
             _host = _hostRaw;
         }
@@ -69,7 +72,7 @@ namespace VsVim.UnitTest
         public void GotoDefinition1()
         {
             Create();
-            var textView = EditorUtil.CreateView("");
+            var textView = EditorUtil.CreateTextView("");
             _textManager.SetupGet(x => x.ActiveTextView).Returns(textView);
             Assert.IsFalse(_host.GoToDefinition());
         }
@@ -78,7 +81,7 @@ namespace VsVim.UnitTest
         public void GotoDefinition2()
         {
             Create();
-            var textView = EditorUtil.CreateView("");
+            var textView = EditorUtil.CreateTextView("");
             _textManager.SetupGet(x => x.ActiveTextView).Returns(textView);
             _dte.Setup(x => x.ExecuteCommand(VsVimHost.CommandNameGoToDefinition, String.Empty)).Throws(new Exception());
             Assert.IsFalse(_host.GoToDefinition());
@@ -88,7 +91,7 @@ namespace VsVim.UnitTest
         public void GotoDefinition3()
         {
             Create();
-            var textView = EditorUtil.CreateView("");
+            var textView = EditorUtil.CreateTextView("");
             _textManager.SetupGet(x => x.ActiveTextView).Returns(textView);
             _dte.Setup(x => x.ExecuteCommand(VsVimHost.CommandNameGoToDefinition, String.Empty));
             Assert.IsTrue(_host.GoToDefinition());
@@ -99,7 +102,7 @@ namespace VsVim.UnitTest
         {
             Create();
             var ct = EditorUtil.GetOrCreateContentType(VsVim.Constants.CPlusPlusContentType, "code");
-            var textView = EditorUtil.CreateView(ct, "hello world");
+            var textView = EditorUtil.CreateTextView(ct, "hello world");
             _textManager.SetupGet(x => x.ActiveTextView).Returns(textView);
             _dte.Setup(x => x.ExecuteCommand(VsVimHost.CommandNameGoToDefinition, "hello"));
             Assert.IsTrue(_host.GoToDefinition());
@@ -111,7 +114,7 @@ namespace VsVim.UnitTest
         {
             Create();
             var ct = EditorUtil.GetOrCreateContentType("csharp", "code");
-            var textView = EditorUtil.CreateView(ct, "hello world");
+            var textView = EditorUtil.CreateTextView(ct, "hello world");
             _textManager.SetupGet(x => x.ActiveTextView).Returns(textView);
             _dte.Setup(x => x.ExecuteCommand(VsVimHost.CommandNameGoToDefinition, ""));
             Assert.IsTrue(_host.GoToDefinition());
@@ -121,7 +124,7 @@ namespace VsVim.UnitTest
         public void NavigateTo1()
         {
             Create();
-            var buffer = EditorUtil.CreateBuffer("foo", "bar");
+            var buffer = EditorUtil.CreateTextBuffer("foo", "bar");
             var point = new VirtualSnapshotPoint(buffer.CurrentSnapshot, 2);
             _textManager.Setup(x => x.NavigateTo(point)).Returns(true);
             _host.NavigateTo(new VirtualSnapshotPoint(buffer.CurrentSnapshot, 2));
