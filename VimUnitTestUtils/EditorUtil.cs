@@ -8,10 +8,10 @@ using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Operations;
+using Microsoft.VisualStudio.Text.Outlining;
 using Microsoft.VisualStudio.Utilities;
 using Vim.UnitTest.Exports;
 using IOPath = System.IO.Path;
-using Microsoft.VisualStudio.Text.Outlining;
 
 namespace Vim.UnitTest
 {
@@ -74,6 +74,9 @@ namespace Vim.UnitTest
 
             [Import]
             public IOutliningManagerService OutliningManagerService;
+
+            [Import]
+            public IAdhocOutlinerFactory AdhocOutlinerFactory;
         }
 
         #endregion
@@ -135,7 +138,7 @@ namespace Vim.UnitTest
 
             if (lines.Length != 0)
             {
-                var text = lines.Aggregate((x, y) => x + Environment.NewLine + y);
+                var text = CreateLines(lines);
                 buffer.Replace(new Span(0, 0), text);
             }
 
@@ -168,6 +171,24 @@ namespace Vim.UnitTest
             var view = CreateTextView(lines);
             var opts = FactoryService.EditorOperationsFactory.GetEditorOperations(view);
             return Tuple.Create(view, opts);
+        }
+
+        /// <summary>
+        /// Create a single string that is the combination of the provided strings and a new
+        /// line between each
+        /// </summary>
+        public static string CreateLines(params string[] lines)
+        {
+            return lines.Aggregate((x, y) => x + Environment.NewLine + y);
+        }
+
+        /// <summary>
+        /// Create a single string that is the combination of the provided strings and a new
+        /// line between each and at the end
+        /// </summary>
+        public static string CreateLinesWithLineBreak(params string[] lines)
+        {
+            return CreateLines(lines) + Environment.NewLine;
         }
 
         public static IEditorOperations GetEditorOperations(ITextView view)
@@ -239,7 +260,8 @@ namespace Vim.UnitTest
                 typeof(KeyboardDevice),
                 typeof(MouseDevice),
                 typeof(VimHost),
-                typeof(VimErrorDetector)));
+                typeof(VimErrorDetector),
+                typeof(AdhocOutlinerFactory)));
 
             return list;
         }

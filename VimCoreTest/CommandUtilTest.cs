@@ -43,10 +43,6 @@ namespace VimCore.UnitTest
             _factory = new MockRepository(MockBehavior.Loose);
             _vimHost = _factory.Create<IVimHost>();
             _statusUtil = _factory.Create<IStatusUtil>();
-            _operations = _factory.Create<ICommonOperations>();
-            _operations.Setup(x => x.EnsureCaretOnScreenAndTextExpanded());
-            _operations.Setup(x => x.RaiseSearchResultMessage(It.IsAny<SearchResult>()));
-            _operations.Setup(x => x.EditorOptions).Returns(EditorUtil.FactoryService.EditorOptionsFactory.GetOptions(_textView));
             _recorder = _factory.Create<IMacroRecorder>(MockBehavior.Loose);
             _smartIdentationService = _factory.Create<ISmartIndentationService>();
 
@@ -55,6 +51,19 @@ namespace VimCore.UnitTest
             _markMap = new MarkMap(new TrackingLineColumnService());
             _globalSettings = new GlobalSettings();
             _localSettings = new LocalSettings(_globalSettings, EditorUtil.GetEditorOptions(_textView), _textView);
+
+            _operations = _factory.Create<ICommonOperations>();
+            _operations.Setup(x => x.EnsureCaretOnScreenAndTextExpanded());
+            _operations.Setup(x => x.RaiseSearchResultMessage(It.IsAny<SearchResult>()));
+            _operations.Setup(x => x.EditorOptions).Returns(EditorUtil.FactoryService.EditorOptionsFactory.GetOptions(_textView));
+            _operations
+                .Setup(x => x.MoveCaretToPointAndCheckVirtualSpace(It.IsAny<SnapshotPoint>()))
+                .Callback<SnapshotPoint>(
+                    point =>
+                    {
+                        TextViewUtil.MoveCaretToPoint(_textView, point);
+                        CommonUtil.MoveCaretForVirtualEdit(_textView, _globalSettings);
+                    });
 
             var localSettings = new LocalSettings(new Vim.GlobalSettings());
             _motionUtil = VimUtil.CreateTextViewMotionUtil(
@@ -606,6 +615,7 @@ namespace VimCore.UnitTest
         public void DeleteCharacterAtCaret_CountExceedsLine()
         {
             Create("the cat", "bar");
+            _globalSettings.VirtualEdit = "onemore";
             _textView.MoveCaretTo(1);
             _commandUtil.DeleteCharacterAtCaret(300, UnnamedRegister);
             Assert.AreEqual("t", _textView.GetLine(0).GetText());
@@ -638,8 +648,51 @@ namespace VimCore.UnitTest
             Assert.AreEqual(0, _textView.GetCaretPoint().Position);
         }
 
+        /// <summary>
+        /// Standard case of deleting several lines in the buffer
+        /// </summary>
         [Test]
-        public void DeleteLinesIncludingLineBreak_Simple()
+        public void DeleteLines_Multiple()
+        {
+            Create("cat", "dog", "bear");
+            _commandUtil.DeleteLines(2, UnnamedRegister);
+            Assert.AreEqual(EditorUtil.CreateLinesWithLineBreak("cat", "dog"), UnnamedRegister.StringValue);
+            Assert.AreEqual("bear", _textView.GetLine(0).GetText());
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        /// <summary>
+        /// Verify the deleting of lines where the count causes the deletion to cross 
+        /// over a fold
+        /// </summary>
+        [Test]
+        public void DeleteLines_OverFold()
+        {
+            Create("cat", "dog", "bear", "fish", "tree");
+            _foldManager.CreateFold(_textView.GetLineRange(1, 2));
+            _commandUtil.DeleteLines(3, UnnamedRegister);
+            Assert.AreEqual(EditorUtil.CreateLinesWithLineBreak("cat", "dog", "bear", "fish"), UnnamedRegister.StringValue);
+            Assert.AreEqual("tree", _textView.GetLine(0).GetText());
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        /// <summary>
+        /// Verify the deleting of lines where the count causes the deletion to cross 
+        /// over a fold which begins the deletion span
+        /// </summary>
+        [Test]
+        public void DeleteLines_StartOfFold()
+        {
+            Create("cat", "dog", "bear", "fish", "tree");
+            _foldManager.CreateFold(_textView.GetLineRange(0, 1));
+            _commandUtil.DeleteLines(2, UnnamedRegister);
+            Assert.AreEqual(EditorUtil.CreateLinesWithLineBreak("cat", "dog", "bear"), UnnamedRegister.StringValue);
+            Assert.AreEqual("fish", _textView.GetLine(0).GetText());
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        [Test]
+        public void DeleteLines_Simple()
         {
             Create("foo", "bar", "baz", "jaz");
             _commandUtil.DeleteLines(1, UnnamedRegister);
@@ -649,7 +702,7 @@ namespace VimCore.UnitTest
         }
 
         [Test]
-        public void DeleteLinesIncludingLineBreak_WithCount()
+        public void DeleteLines_WithCount()
         {
             Create("foo", "bar", "baz", "jaz");
             _commandUtil.DeleteLines(2, UnnamedRegister);
@@ -662,7 +715,7 @@ namespace VimCore.UnitTest
         /// Delete the last line and make sure it actually deletes a line from the buffer
         /// </summary>
         [Test]
-        public void DeleteLinesIncludingLineBreak_LastLine()
+        public void DeleteLines_LastLine()
         {
             Create("foo", "bar");
             _textView.MoveCaretToLine(1);
@@ -864,6 +917,7 @@ namespace VimCore.UnitTest
         public void ChangeCaseCaretPoint_CountExceedsLine()
         {
             Create("bar", "baz");
+            _globalSettings.VirtualEdit = "onemore";
             _commandUtil.ChangeCaseCaretPoint(ChangeCharacterKind.ToUpperCase, 300);
             Assert.AreEqual("BAR", _textView.GetLine(0).GetText());
             Assert.AreEqual("baz", _textView.GetLine(1).GetText());
@@ -1124,12 +1178,10 @@ namespace VimCore.UnitTest
         {
             Create("cat", "dog");
             var visualSpan = VisualSpan.NewCharacter(_textView.GetLineSpan(0, 1, 1));
-            _operations.Setup(x => x.MoveCaretForVirtualEdit());
             _commandUtil.DeleteLineSelection(UnnamedRegister, visualSpan);
             Assert.AreEqual("cat" + Environment.NewLine, UnnamedRegister.StringValue);
             Assert.AreEqual("dog", _textView.GetLine(0).GetText());
             Assert.AreEqual(1, _textView.GetCaretPoint().Position);
-            _operations.Verify();
         }
 
         /// <summary>
@@ -1158,13 +1210,11 @@ namespace VimCore.UnitTest
         {
             Create("cat", "dog", "fish");
             _globalSettings.VirtualEdit = String.Empty;
-            _operations.Setup(x => x.MoveCaretForVirtualEdit());
             var visualSpan = VisualSpan.NewBlock(_textView.GetBlock(1, 1, 0, 2));
             _commandUtil.DeleteLineSelection(UnnamedRegister, visualSpan);
             Assert.AreEqual("c", _textView.GetLine(0).GetText());
             Assert.AreEqual("d", _textView.GetLine(1).GetText());
-            Assert.AreEqual(1, _textView.GetCaretPoint().Position);
-            _operations.Verify();
+            Assert.AreEqual(0, _textView.GetCaretPoint().Position);
         }
 
         /// <summary>
@@ -1269,11 +1319,12 @@ namespace VimCore.UnitTest
         public void ChangeTillEndOfLine_MiddleOfLine()
         {
             Create("cat");
+            _globalSettings.VirtualEdit = string.Empty;
             _textView.MoveCaretTo(1);
             var result = _commandUtil.ChangeTillEndOfLine(1, UnnamedRegister);
             AssertInsertWithTransaction(result);
             Assert.AreEqual("c", _textView.GetLine(0).GetText());
-            Assert.AreEqual(1, _textView.GetCaretPoint().Position);
+            Assert.AreEqual(0, _textView.GetCaretPoint().Position);
         }
 
         /// <summary>
@@ -1683,12 +1734,27 @@ namespace VimCore.UnitTest
         /// the folded text
         /// </summary>
         [Test]
-        public void YankLines_Overfold()
+        public void YankLines_StartOfFold()
         {
-            Create("cat", "dog", "bear", "fish");
-            _foldManager.CreateFold(_textView.GetLineRange(0, 1));
+            Create("cat", "dog", "bear", "fish", "pig");
+            _foldManager.CreateFold(_textView.GetLineRange(1, 2));
+            _textView.MoveCaretToLine(1);
             _commandUtil.YankLines(2, UnnamedRegister);
-            Assert.AreEqual("cat" + Environment.NewLine + "dog" + Environment.NewLine + "bear" + Environment.NewLine, UnnamedRegister.StringValue);
+            Assert.AreEqual("dog" + Environment.NewLine + "bear" + Environment.NewLine + "fish" + Environment.NewLine, UnnamedRegister.StringValue);
+            Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
+        }
+
+        /// <summary>
+        /// Ensure that yanking over a fold will count the fold as one line
+        /// </summary>
+        [Test]
+        public void YankLines_OverFold()
+        {
+            Create("cat", "dog", "bear", "fish", "pig");
+            _foldManager.CreateFold(_textView.GetLineRange(1, 2));
+            _commandUtil.YankLines(3, UnnamedRegister);
+            var text = EditorUtil.CreateLines("cat", "dog", "bear", "fish") + Environment.NewLine;
+            Assert.AreEqual(text, UnnamedRegister.StringValue);
             Assert.AreEqual(OperationKind.LineWise, UnnamedRegister.OperationKind);
         }
     }

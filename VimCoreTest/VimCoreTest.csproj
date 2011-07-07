@@ -205,14 +205,13 @@
     <Compile Include="SettingsCommonTest.cs" />
     <Compile Include="SnapshotUtilTest.cs" />
     <Compile Include="TextUtilTest.cs" />
-    <Compile Include="TextUtilTest2.cs" />
     <Compile Include="TextViewUtilTest.cs" />
     <Compile Include="TrackingLineColumnTest.cs" />
     <Compile Include="UndoRedoOperationsTest.cs" />
     <Compile Include="UndoTransactionTest.cs" />
     <Compile Include="ViewUtilTest.cs" />
     <Compile Include="VimBufferFactoryIntegrationTest.cs" />
-    <Compile Include="VimBufferTests.cs" />
+    <Compile Include="VimBufferTest.cs" />
     <Compile Include="VimIntegrationTests.cs" />
     <Compile Include="VimTest.cs" />
     <Compile Include="VisualModeTest.cs" />

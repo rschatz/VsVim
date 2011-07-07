@@ -2452,13 +2452,26 @@ and IVimBuffer =
 
     /// Get the specified Mode
     abstract GetMode : ModeKind -> IMode
-    
+
+    /// Get the KeyInput value produced by this KeyInput in the current state of the
+    /// IVimBuffer.  This will consider any buffered KeyInput values.
+    abstract GetKeyInputMapping : KeyInput -> KeyMappingResult
+
     /// Process the KeyInput and return whether or not the input was completely handled
     abstract Process : KeyInput -> ProcessResult
 
-    /// Can the passed in KeyInput be consumed by the current state of IVimBuffer.  The
+    /// Can the passed in KeyInput be processed by the current state of IVimBuffer.  The
     /// provided KeyInput will participate in remapping based on the current mode
     abstract CanProcess: KeyInput -> bool
+
+    /// Can the passed in KeyInput be processed as a Vim command by the current state of
+    /// the IVimBuffer.  The provided KeyInput will participate in remapping based on the
+    /// current mode
+    ///
+    /// This is very similar to CanProcess except it will return false for any KeyInput
+    /// which would be processed as a direct insert.  In other words commands like 'a',
+    /// 'b' when handled by insert / replace mode
+    abstract CanProcessAsCommand : KeyInput -> bool
 
     /// Switch the current mode to the provided value
     abstract SwitchMode : ModeKind -> ModeArgument -> IMode
@@ -2525,6 +2538,7 @@ and IVimBuffer =
 
     inherit IPropertyOwner
 
+/// Interface for a given Mode of Vim.  For example normal, insert, etc ...
 and IMode =
 
     /// Owning IVimBuffer
@@ -2571,13 +2585,17 @@ and INormalMode =
 
     inherit IMode
 
+/// This is the interface implemented by Insert and Replace mode
 and IInsertMode =
 
     /// Is InsertMode currently processing a Text Input value
-    abstract IsProcessingTextInput : bool
+    abstract IsProcessingDirectInsert : bool
 
-    /// Does Insert Mode consider this to be simple text input 
-    abstract IsTextInput : KeyInput -> bool
+    /// Is this KeyInput value considered to be a direct insert command in the current
+    /// state of the IVimBuffer.  This does not apply to commands which edit the buffer
+    /// like 'CTRL-D' but instead commands like 'a', 'b' which directly edit the 
+    /// ITextBuffer
+    abstract IsDirectInsert : KeyInput -> bool
 
     inherit IMode
 

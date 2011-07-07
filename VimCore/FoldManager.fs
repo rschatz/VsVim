@@ -100,12 +100,20 @@ type internal FoldManager
 
     member x.CurrentSnapshot = _textView.TextSnapshot
 
+    /// Even though Vim is line based we have to deal with regions provided by other plug-ins
+    /// or Visual Studio which are not line based.  So look for any regions which cross the
+    /// provided line
+    member x.GetSpanForRegions point =
+        point
+        |> SnapshotPointUtil.GetContainingLine
+        |> SnapshotLineUtil.GetExtentIncludingLineBreak
+
     /// Close 'count' folds under the given SnapshotPoint
     member x.CloseFold point count = 
         x.DoWithOutliningManager (fun outliningManager -> 
             // Get the collapsed regions and map them to SnapshotSpan values in this buffer.  Then
             // order them by most start and then length
-            let span = SnapshotSpan(point, 0)
+            let span = x.GetSpanForRegions point
             outliningManager.GetAllRegions(span)
             |> Seq.filter (fun region -> not region.IsCollapsed)
             |> List.ofSeq
@@ -165,7 +173,7 @@ type internal FoldManager
 
             // Get the collapsed regions and map them to SnapshotSpan values in this buffer.  Then
             // order them by most start and then length
-            let span = SnapshotSpan(point, 0)
+            let span = x.GetSpanForRegions point
             outliningManager.GetCollapsedRegions(span)
             |> Seq.truncate count
             |> Seq.iter (fun region -> outliningManager.Expand(region) |> ignore))
@@ -213,7 +221,7 @@ type internal FoldTagger(_foldData : IFoldData) as this =
             let snapshot = (col.Item(0)).Snapshot
             _foldData.Folds
             |> Seq.filter ( fun span -> span.Snapshot = snapshot )
-            |> Seq.map (fun span -> 
+            |> Seq.map (fun span ->
                 let description = getDescription span
                 let hint = span.GetText()
                 let tag = OutliningRegionTag(true, true, description, hint)
@@ -256,15 +264,16 @@ type FoldManagerFactory
         textBuffer.Properties.GetOrCreateSingletonProperty(_dataKey, (fun _ -> FoldData(textBuffer)))
 
     member x.GetFoldManager (textView : ITextView) = 
-        let outliningManager = 
-            let outliningManager = _outliningManagerService.GetOutliningManager textView
-            if outliningManager = null then
-                None
-            else
-                Some outliningManager
-        let statusUtil = _statusUtilFactory.GetStatusUtil textView
-        let foldData = x.GetFoldData(textView.TextBuffer)
-        FoldManager(textView, foldData :> IFoldData, statusUtil, outliningManager) :> IFoldManager
+        textView.Properties.GetOrCreateSingletonProperty(_managerKey, (fun _ ->
+            let outliningManager = 
+                let outliningManager = _outliningManagerService.GetOutliningManager textView
+                if outliningManager = null then
+                    None
+                else
+                    Some outliningManager
+            let statusUtil = _statusUtilFactory.GetStatusUtil textView
+            let foldData = x.GetFoldData(textView.TextBuffer)
+            FoldManager(textView, foldData :> IFoldData, statusUtil, outliningManager) :> IFoldManager))
 
     interface IFoldManagerFactory with
         member x.GetFoldData textBuffer = x.GetFoldData textBuffer :> IFoldData

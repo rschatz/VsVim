@@ -52,7 +52,7 @@ namespace VimCore.UnitTest
             Create("the quick brown", "fox jumped", " over the dog");
             var range = _textBuffer.GetLineRange(0, 1);
             _foldData.CreateFold(range);
-            Assert.AreEqual(range.ExtentIncludingLineBreak, _foldData.Folds.Single());
+            Assert.AreEqual(range.Extent, _foldData.Folds.Single());
         }
 
         /// <summary>

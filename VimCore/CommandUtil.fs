@@ -1,4 +1,4 @@
-﻿
+﻿#light
 
 namespace Vim
 open Vim.Modes
@@ -19,6 +19,7 @@ type internal CommandUtil
 
     let _textView = _buffer.TextView
     let _textBuffer = _textView.TextBuffer
+    let _bufferGraph = _textView.BufferGraph
     let _motionUtil = _buffer.MotionUtil
     let _registerMap = _buffer.RegisterMap
     let _markMap = _buffer.MarkMap
@@ -232,8 +233,8 @@ type internal CommandUtil
             x.ChangeCaseSpanCore kind editSpan
 
             // Move the caret but make sure to respect the 'virtualedit' option
-            TextViewUtil.MoveCaretToPosition _textView span.End.Position
-            _operations.MoveCaretForVirtualEdit())
+            let point = SnapshotPoint(x.CurrentSnapshot, span.End.Position)
+            _operations.MoveCaretToPointAndCheckVirtualSpace point)
 
         CommandResult.Completed ModeSwitch.NoSwitch
 
@@ -472,11 +473,11 @@ type internal CommandUtil
             x.EditWithUndoTransaciton "DeleteChar" (fun () -> 
                 let position = x.CaretPoint.Position
                 let snapshot = _textBuffer.Delete(span.Span)
-                TextViewUtil.MoveCaretToPoint _textView (SnapshotPoint(snapshot, position))
 
                 // Need to respect the virtual edit setting here as we could have 
                 // deleted the last character on the line
-                _operations.MoveCaretForVirtualEdit())
+                let point = SnapshotPoint(snapshot, position)
+                _operations.MoveCaretToPointAndCheckVirtualSpace point)
 
             // Put the deleted text into the specified register
             let value = RegisterValue.String (StringData.OfSpan span, OperationKind.CharacterWise)
@@ -579,11 +580,11 @@ type internal CommandUtil
                 edit.Apply() |> ignore
     
                 // Now position the cursor back at the start of the VisualSpan
-                TextViewUtil.MoveCaretToPosition _textView visualSpan.Start.Position
-    
+                //
                 // Possible for a block mode to deletion to cause the start to now be in the line 
                 // break so we need to acount for the 'virtualedit' setting
-                _operations.MoveCaretForVirtualEdit()
+                let point = SnapshotPoint(x.CurrentSnapshot, visualSpan.Start.Position)
+                _operations.MoveCaretToPointAndCheckVirtualSpace point
 
                 editSpan)
 
@@ -633,11 +634,14 @@ type internal CommandUtil
 
     /// Delete count lines from the cursor.  The caret should be positioned at the start
     /// of the first line for both undo / redo
-    ///
-    /// TODO: this needs to operate on the Visual Snapshot
     member x.DeleteLines count register = 
-        let line = x.CaretLine
-        let span, stringData = 
+
+        let span, includesLastLine =
+            // The span should be calculated using the visual snapshot if available.  Binding 
+            // it as 'x' here will help prevent us from accidentally mixing the visual and text
+            // snapshot values
+            let x = TextViewUtil.GetVisualSnapshotDataOrEdit _textView
+            let line = x.CaretLine
             if line.LineNumber = SnapshotUtil.GetLastLineNumber x.CurrentSnapshot && x.CurrentSnapshot.LineCount > 1 then
                 // The last line is an unfortunate special case here as it does not have a line break.  Hence 
                 // in order to delete the line we must delete the line break at the end of the preceeding line.  
@@ -647,24 +651,39 @@ type internal CommandUtil
                 // deal with
                 let above = SnapshotUtil.GetLine x.CurrentSnapshot (line.LineNumber - 1)
                 let span = SnapshotSpan(above.End, line.EndIncludingLineBreak)
-                let data = StringData.Simple (line.GetText() + System.Environment.NewLine)
-                (span, data)
+                span, true
             else 
                 // Simpler case.  Get the line range and delete
                 let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
-                (range.ExtentIncludingLineBreak, StringData.OfSpan range.ExtentIncludingLineBreak)
+                range.ExtentIncludingLineBreak, false
 
-        // Use a transaction to properly position the caret for undo / redo.  We want it in the same
-        // place for undo / redo so move it before the transaction
-        TextViewUtil.MoveCaretToPoint _textView span.Start
-        x.EditWithUndoTransaciton "DeleteLines" (fun() -> 
-            let snapshot = _textBuffer.Delete(span.Span)
-            TextViewUtil.MoveCaretToPoint _textView (SnapshotPoint(snapshot, span.Start.Position)))
+        // Make sure to map the SnapshotSpan back into the text / edit buffer
+        match BufferGraphUtil.MapSpanDownToSingle _bufferGraph span x.CurrentSnapshot with
+        | None ->
+            // If we couldn't map back down raise an error
+            _statusUtil.OnError Resources.Internal_ErrorMappingToVisual
+        | Some span ->
 
-        // Now update the register after the delete completes
-        let value = RegisterValue.String (stringData, OperationKind.LineWise)
-        _registerMap.SetRegisterValue register RegisterOperation.Delete value
+            // When calculating the text to put into the register we must add in a trailing new line
+            // if we were dealing with the last line.  The last line won't include a line break but 
+            // we require that line wise values end in breaks for consistency
+            let stringData = 
+                if includesLastLine then
+                    (span.GetText()) + System.Environment.NewLine |> EditUtil.RemoveBeginingNewLine |> StringData.Simple
+                else
+                    StringData.OfSpan span
 
+            // Use a transaction to properly position the caret for undo / redo.  We want it in the same
+            // place for undo / redo so move it before the transaction
+            TextViewUtil.MoveCaretToPoint _textView span.Start
+            x.EditWithUndoTransaciton "DeleteLines" (fun() -> 
+                let snapshot = _textBuffer.Delete(span.Span)
+                TextViewUtil.MoveCaretToPoint _textView (SnapshotPoint(snapshot, span.Start.Position)))
+
+            // Now update the register after the delete completes
+            let value = RegisterValue.String (stringData, OperationKind.LineWise)
+            _registerMap.SetRegisterValue register RegisterOperation.Delete value
+    
         CommandResult.Completed ModeSwitch.NoSwitch
 
     /// Delete the specified motion of text
@@ -690,7 +709,10 @@ type internal CommandUtil
         TextViewUtil.MoveCaretToPoint _textView span.Start
         x.EditWithUndoTransaciton "Delete" (fun () ->
             _textBuffer.Delete(span.Span) |> ignore
-            TextViewUtil.MoveCaretToPosition _textView span.Start.Position)
+
+            // Get the point on the current ITextSnapshot
+            let point = SnapshotPoint(x.CurrentSnapshot, span.Start.Position)
+            _operations.MoveCaretToPointAndCheckVirtualSpace point)
 
         // Update the register with the result so long as something was actually deleted
         // from the buffer
@@ -705,7 +727,7 @@ type internal CommandUtil
     member x.DeleteTillEndOfLine count register =
         let span = 
             if count = 1 then
-                // Just deleting till the end of 
+                // Just deleting till the end of the caret line
                 SnapshotSpan(x.CaretPoint, x.CaretLine.End)
             else
                 // Grab a SnapshotLineRange for the 'count - 1' lines and combine in with
@@ -717,7 +739,10 @@ type internal CommandUtil
         // delete so wrap it in an undo transaction
         x.EditWithUndoTransaciton "Delete" (fun () -> 
             _textBuffer.Delete(span.Span) |> ignore
-            TextViewUtil.MoveCaretToPosition _textView span.Start.Position)
+
+            // Get the point on the current ITextSnapshot
+            let point = SnapshotPoint(x.CurrentSnapshot, span.Start.Position)
+            _operations.MoveCaretToPointAndCheckVirtualSpace point)
 
         // Delete is complete so update the register.  Strangely enough this is a characterwise
         // operation even though it involves line deletion
@@ -748,6 +773,13 @@ type internal CommandUtil
 
         let arg = ModeArgument.InsertWithTransaction transaction
         CommandResult.Completed (ModeSwitch.SwitchModeWithArgument (ModeKind.Insert, arg))
+
+    /// Used for commands which need to operate on the visual buffer and produce a SnapshotSpan
+    /// to be mapped back to the text / edit buffer
+    member x.EditWithVisualSnapshot action = 
+        let snapshotData = TextViewUtil.GetVisualSnapshotDataOrEdit _textView
+        let span = action snapshotData
+        BufferGraphUtil.MapSpanDownToSingle _bufferGraph span x.CurrentSnapshot
 
     /// Close a fold under the caret for 'count' lines
     member x.FoldLines count =
@@ -1229,7 +1261,7 @@ type internal CommandUtil
                             // Position at the original insertion point
                             SnapshotUtil.GetPoint x.CurrentSnapshot oldPoint.Position
 
-                TextViewUtil.MoveCaretToPoint _textView point
+                _operations.MoveCaretToPointAndCheckVirtualSpace point
             | OperationKind.LineWise ->
 
                 // Get the line on which we will be positioning the caret
@@ -1254,9 +1286,7 @@ type internal CommandUtil
 
                 // Get the indent point of the line.  That's what the caret needs to be moved to
                 let point = SnapshotLineUtil.GetIndent line
-                TextViewUtil.MoveCaretToPoint _textView point
-
-            _operations.MoveCaretForVirtualEdit())
+                _operations.MoveCaretToPointAndCheckVirtualSpace point)
 
     /// Put the contents of the specified register over the selection.  This is used for all
     /// visual mode put commands. 
@@ -2068,11 +2098,21 @@ type internal CommandUtil
     /// against the visual buffer if possible.  Yanking a line which contains the fold should
     /// yank the entire fold
     member x.YankLines count register = 
-        let x = TextViewUtil.GetVisualSnapshotDataOrEdit _textView
-        let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
-        let data = StringData.OfSpan range.ExtentIncludingLineBreak 
-        let value = RegisterValue.String (data, OperationKind.LineWise)
-        _registerMap.SetRegisterValue register RegisterOperation.Yank value
+        let span = x.EditWithVisualSnapshot (fun x -> 
+
+            // Get the line range in the snapshot data
+            let range = SnapshotLineRangeUtil.CreateForLineAndMaxCount x.CaretLine count
+            range.ExtentIncludingLineBreak)
+
+        match span with
+        | None ->
+            // If we couldn't map back down raise an error
+            _statusUtil.OnError Resources.Internal_ErrorMappingToVisual
+        | Some span ->
+
+            let data = StringData.OfSpan span
+            let value = RegisterValue.String (data, OperationKind.LineWise)
+            _registerMap.SetRegisterValue register RegisterOperation.Yank value
 
         CommandResult.Completed ModeSwitch.NoSwitch
 
